@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>WebSocket</title>
+</head>
+
+<body>
+  <button onclick="closeWs()">Click to close</button>
+  <p id="output"></p>
+
+  <script>
+    var loc = window.location;
+    var uri = 'ws:';
+
+    if (loc.protocol === 'https:') {
+      uri = 'wss:';
+    }
+    uri += '//' + loc.host;
+    uri += loc.pathname + 'ws';
+
+    ws = new WebSocket(uri)
+
+    ws.onopen = function() {
+      console.log('Connected')
+    }
+
+    var out = document.getElementById('output');
+    ws.onmessage = function(evt) {
+      out.innerHTML += evt.data + '<br>';
+    }
+
+    var interval = setInterval(function() {
+      ws.send('Hello, Server!');
+    }, 1000);
+
+    ws.onclose = function() {
+      console.log('Closed')
+      out.innerHTML += 'Connection closed<br>';
+      clearInterval(interval);
+    }
+
+    function closeWs(params) {
+      console.log('close')
+      ws.close()
+    }
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,10 @@
+config:
+  worker_pool_size: 12
+  max_worker_task_len: 12
+  max_package_size: 4096
+  message:
+    format: text
+    endian: big
+  tlv:
+    type: 1
+    length: 0
