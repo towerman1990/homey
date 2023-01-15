@@ -73,18 +73,18 @@ func NewMessage(packageType uint32, data []byte) Message {
 }
 
 func GetHeadLength() int8 {
-	return config.GlobalConfig.L + config.GlobalConfig.T
+	return config.GlobalConfig.LengthByte + config.GlobalConfig.TypeByte
 }
 
 func Pack(message Message) (packageData []byte, err error) {
 	dataBuff := bytes.NewBuffer([]byte{})
-	if config.GlobalConfig.L > 0 {
+	if config.GlobalConfig.LengthByte > 0 {
 		if err := binary.Write(dataBuff, binary.LittleEndian, message.GetDataLength()); err != nil {
 			return packageData, err
 		}
 	}
 
-	if config.GlobalConfig.L > 0 {
+	if config.GlobalConfig.TypeByte > 0 {
 		if err := binary.Write(dataBuff, binary.LittleEndian, message.GetPackageType()); err != nil {
 			return packageData, err
 		}
@@ -103,7 +103,7 @@ func UnPack(binaryData []byte) (Message, error) {
 	message := &message{}
 	dataBuff := bytes.NewBuffer(binaryData)
 
-	if config.GlobalConfig.L > 0 {
+	if config.GlobalConfig.LengthByte > 0 {
 		if err := binary.Read(dataBuff, binary.LittleEndian, &message.DataLength); err != nil {
 			return message, err
 		}
@@ -113,7 +113,7 @@ func UnPack(binaryData []byte) (Message, error) {
 		return message, fmt.Errorf("data length [%d] beyond max package size limit", message.DataLength)
 	}
 
-	if config.GlobalConfig.T > 0 {
+	if config.GlobalConfig.TypeByte > 0 {
 		if err := binary.Read(dataBuff, binary.LittleEndian, &message.PackageType); err != nil {
 			return message, err
 		}

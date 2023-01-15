@@ -17,8 +17,8 @@ type Message struct {
 }
 
 type TLV struct {
-	T int8 `yaml:"type"`
-	L int8 `yaml:"length"`
+	TypeByte   int8 `yaml:"type_byte"`
+	LengthByte int8 `yaml:"length_byte"`
 }
 
 type Config struct {
@@ -26,7 +26,7 @@ type Config struct {
 	MaxWorkerTaskLen uint32 `yaml:"max_worker_task_len"`
 	MaxPackageSize   uint32 `yaml:"max_package_size"`
 	Message          `yaml:"message"`
-	TLV
+	TLV              `yaml:"tlv"`
 }
 
 type Global struct {
@@ -34,12 +34,10 @@ type Global struct {
 }
 
 func init() {
-	log.Info("config init")
 	loadConfigFile()
 }
 
 func loadConfigFile() {
-	log.Info("call loadConfigFile function")
 	GlobalConfig = Global{
 		Config: Config{
 			WorkerPoolSize:   0,
@@ -50,13 +48,13 @@ func loadConfigFile() {
 				Endian: "little",
 			},
 			TLV: TLV{
-				T: 0,
-				L: 0,
+				TypeByte:   0,
+				LengthByte: 0,
 			},
 		},
 	}
 
-	configFile, err := os.ReadFile("./conf/homey.yml")
+	configFile, err := os.ReadFile("../example/conf/homey.yml")
 	if err != nil {
 		log.Errorf("load config file failed, error: %v", err)
 		return
@@ -68,10 +66,8 @@ func loadConfigFile() {
 		return
 	}
 
-	log.Info(GlobalConfig.WorkerPoolSize)
-	log.Info(GlobalConfig.Message.Format)
 	if GlobalConfig.Message.Format != "binary" {
-		GlobalConfig.TLV.T = 0
-		GlobalConfig.TLV.L = 0
+		GlobalConfig.TLV.TypeByte = 0
+		GlobalConfig.TLV.LengthByte = 0
 	}
 }

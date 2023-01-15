@@ -4,7 +4,7 @@ config:
   max_package_size: 4096
   message:
     format: text
-    endian: big
+    endian: little
   tlv:
-    type: 1
-    length: 0
+    type_byte: 1
+    length_byte: 0
