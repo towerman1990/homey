@@ -67,13 +67,13 @@ func (h *Homey) Echo() echo.HandlerFunc {
 			return err
 		}
 
-		uid, err := utils.GenUid()
+		id, err := utils.GenID()
 		if err != nil {
 			return err
 		}
 
 		h.MessageHandler.StartWorkPool()
-		conn := NewEchoConnection(uid, h, c, ws)
+		conn := NewEchoConnection(id, h, c, ws)
 		defer conn.Close()
 		go conn.Open()
 		switchs := 0

@@ -65,7 +65,7 @@ func (mh *messageHandler) StartOneWork(i int) {
 }
 
 func (mh *messageHandler) SendMsgToTaskQueue(request Request) {
-	workerID := request.GetConnection().GetID() % int64(mh.WorkerPoolSize)
+	workerID := request.GetConnection().GetID() % uint64(mh.WorkerPoolSize)
 	mh.TaskQueue[workerID] <- request
 }
 

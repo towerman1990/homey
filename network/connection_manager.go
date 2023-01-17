@@ -15,7 +15,7 @@ type ConnectionManager interface {
 	Remove(Connection)
 
 	// get a connection by connection ID
-	Get(int64) (Connection, error)
+	Get(uint64) (Connection, error)
 
 	// count how many connections in total
 	Count() int
@@ -26,7 +26,7 @@ type ConnectionManager interface {
 
 type connectionManager struct {
 	// all connections map
-	connections map[int64]Connection
+	connections map[uint64]Connection
 
 	lock sync.RWMutex
 }
@@ -46,7 +46,7 @@ func (cm *connectionManager) Remove(conn Connection) {
 	delete(cm.connections, conn.GetID())
 }
 
-func (cm *connectionManager) Get(connID int64) (conn Connection, err error) {
+func (cm *connectionManager) Get(connID uint64) (conn Connection, err error) {
 	cm.lock.RLock()
 	defer cm.lock.RUnlock()
 	if conn, ok := cm.connections[conn.GetID()]; ok {
@@ -71,7 +71,7 @@ func (cm *connectionManager) Clear() {
 
 func NewConnectionManager() ConnectionManager {
 	return &connectionManager{
-		connections: make(map[int64]Connection),
+		connections: make(map[uint64]Connection),
 		lock:        sync.RWMutex{},
 	}
 }

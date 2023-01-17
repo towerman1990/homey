@@ -12,7 +12,7 @@ import (
 type Connection interface {
 
 	// get connecton ID
-	GetID() int64
+	GetID() uint64
 
 	// establish a connection between server and client
 	Open()
@@ -31,7 +31,7 @@ type Connection interface {
 }
 
 type connection struct {
-	ID int64
+	ID uint64
 
 	server Server
 
@@ -50,7 +50,7 @@ type connection struct {
 	context interface{}
 }
 
-func (c *connection) GetID() int64 {
+func (c *connection) GetID() uint64 {
 	return c.ID
 }
 
@@ -141,7 +141,7 @@ func (c *connection) GetStatus() bool {
 	return c.isClosed
 }
 
-func NewEchoConnection(uid int64, server Server, context echo.Context, conn *websocket.Conn) Connection {
+func NewEchoConnection(id uint64, server Server, context echo.Context, conn *websocket.Conn) Connection {
 	messageType := websocket.TextMessage
 	if config.GlobalConfig.Message.Format == "binary" {
 		messageType = websocket.BinaryMessage
@@ -149,7 +149,7 @@ func NewEchoConnection(uid int64, server Server, context echo.Context, conn *web
 	log.Info(config.GlobalConfig.Message.Format)
 	log.Info(config.GlobalConfig.Message.Endian)
 	echoConn := &connection{
-		ID:             uid,
+		ID:             id,
 		server:         server,
 		Conn:           conn,
 		messageType:    messageType,
