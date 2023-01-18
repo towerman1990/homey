@@ -2,8 +2,10 @@ package network
 
 import (
 	"fmt"
-	"log"
 	"sync"
+
+	log "github.com/homey/logger"
+	"go.uber.org/zap"
 )
 
 type ConnectionManager interface {
@@ -25,7 +27,7 @@ type ConnectionManager interface {
 }
 
 type connectionManager struct {
-	// all connections map
+	// all alive connections collection
 	connections map[uint64]Connection
 
 	lock sync.RWMutex
@@ -36,7 +38,7 @@ func (cm *connectionManager) Add(conn Connection) {
 	defer cm.lock.Unlock()
 
 	cm.connections[conn.GetID()] = conn
-	log.Printf("add connection to connection_manager successfully, connID = [%d]", conn.GetID())
+	log.Logger.Info("connection was added into connection manager successfully", zap.Uint64("connection", conn.GetID()))
 }
 
 func (cm *connectionManager) Remove(conn Connection) {

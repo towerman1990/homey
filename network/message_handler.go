@@ -4,7 +4,8 @@ import (
 	"fmt"
 
 	"github.com/homey/config"
-	"github.com/labstack/gommon/log"
+	log "github.com/homey/logger"
+	"go.uber.org/zap"
 )
 
 type MessageHandler interface {
@@ -26,10 +27,11 @@ type messageHandler struct {
 }
 
 func (mh *messageHandler) ExecHandler(request Request) {
-	packageType := request.GetMessagePackageType()
-	handler, ok := mh.Handlers[packageType]
+	dataType := request.GetMessageDataType()
+	handler, ok := mh.Handlers[dataType]
 	if !ok {
-		fmt.Printf("packageType [%d] hasn't been added\n", packageType)
+		log.Logger.Warn("data type hasn't been added to router", zap.Uint32("data_type", dataType))
+
 		return
 	}
 
@@ -38,13 +40,13 @@ func (mh *messageHandler) ExecHandler(request Request) {
 	handler.PostHandle(request)
 }
 
-func (mh *messageHandler) AddRouter(packageType uint32, router Router) (err error) {
-	if _, ok := mh.Handlers[packageType]; ok {
-		return fmt.Errorf("packageType [%d] has been added", packageType)
+func (mh *messageHandler) AddRouter(dataType uint32, router Router) (err error) {
+	if _, ok := mh.Handlers[dataType]; ok {
+		return fmt.Errorf("the data type [%d] has been added", dataType)
 	}
 
-	mh.Handlers[packageType] = router
-	log.Printf("added router successfully, packageType = [%d]", packageType)
+	mh.Handlers[dataType] = router
+	log.Logger.Info("added router successfully", zap.Uint32("data_type", dataType))
 
 	return
 }
@@ -57,7 +59,7 @@ func (mh *messageHandler) StartWorkPool() {
 }
 
 func (mh *messageHandler) StartOneWork(i int) {
-	log.Printf("worker [%d] started", i)
+	log.Logger.Info("new worker started", zap.Int("worker_id", i))
 
 	for request := range mh.TaskQueue[i] {
 		mh.ExecHandler(request)

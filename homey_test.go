@@ -7,7 +7,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
-func TestDataPack(t *testing.T) {
+func TestHomey(t *testing.T) {
 	// Echo instance
 	e := echo.New()
 

@@ -1,12 +1,15 @@
 package network
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/gorilla/websocket"
 	"github.com/homey/config"
+	"github.com/homey/distribute"
+	log "github.com/homey/logger"
 	"github.com/labstack/echo/v4"
-	"github.com/labstack/gommon/log"
+	"go.uber.org/zap"
 )
 
 type Connection interface {
@@ -41,13 +44,13 @@ type connection struct {
 
 	messageHandler MessageHandler
 
-	msgChan chan []byte
+	sendMsgChan chan *[]byte
 
 	exitChan chan bool
 
 	isClosed bool
 
-	context interface{}
+	context context.Context
 }
 
 func (c *connection) GetID() uint64 {
@@ -68,11 +71,11 @@ func (c *connection) Close() {
 	}
 	c.isClosed = true
 
-	log.Infof("close connection [%d], remote addr [%s]", c.ID, c.Conn.RemoteAddr().String())
+	log.Logger.Info("close connection", zap.Uint64("connection", c.ID), zap.String("remote address", c.Conn.RemoteAddr().String()))
 
 	c.exitChan <- true
 
-	close(c.msgChan)
+	close(c.sendMsgChan)
 	close(c.exitChan)
 
 	c.Conn.Close()
@@ -81,20 +84,23 @@ func (c *connection) Close() {
 }
 
 func (c *connection) OpenReader() {
-	defer log.Info("close reader")
+	defer log.Logger.Info("close connection reader", zap.Uint64("id", c.ID))
+
 	for {
 		messageType, binaryMessage, err := c.Conn.ReadMessage()
 		if err != nil {
-			log.Errorf("failed to read message, error: %v", err)
+			log.Logger.Error("failed to read message", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
 			return
 		}
-		if messageType == websocket.TextMessage {
-			log.Infof("recevie message: %s", binaryMessage)
+
+		if messageType == websocket.TextMessage && config.GlobalConfig.Message.Format != "text" {
+			log.Logger.Error("invalid message type", zap.Uint64("connection", c.ID), zap.String("error", "unsupport text message type"))
+			return
 		}
 
-		msg, err := UnPack(binaryMessage)
+		msg, err := UnPack(binaryMessage, false)
 		if err != nil {
-			log.Errorf("connection [%d] unpack message failed, error: %v", c.ID, err)
+			log.Logger.Error("failed to unpack message", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
 			break
 		}
 
@@ -112,13 +118,13 @@ func (c *connection) OpenReader() {
 }
 
 func (c *connection) OpenWriter() {
-	log.Info("writer goroutine opened")
-	defer log.Info("close writer")
+	defer log.Logger.Info("close connection writer", zap.Uint64("id", c.ID))
+
 	for {
 		select {
-		case data := <-c.msgChan:
-			if err := c.Conn.WriteMessage(c.messageType, data); err != nil {
-				log.Errorf("failed to write message, error: %v", err)
+		case data := <-c.sendMsgChan:
+			if err := c.Conn.WriteMessage(c.messageType, *data); err != nil {
+				log.Logger.Error("failed to write message", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
 				return
 			}
 		case <-c.exitChan:
@@ -132,7 +138,17 @@ func (c *connection) SendMsg(data []byte) (err error) {
 		return fmt.Errorf("connection [%d] has closed", c.ID)
 	}
 
-	c.msgChan <- data
+	c.sendMsgChan <- &data
+
+	return
+}
+
+func (c *connection) SendForwardMsg(data []byte) (err error) {
+	if c.isClosed {
+		return fmt.Errorf("connection [%d] has closed", c.ID)
+	}
+
+	err = distribute.PublishForwardMsg(c.context, data)
 
 	return
 }
@@ -146,18 +162,18 @@ func NewEchoConnection(id uint64, server Server, context echo.Context, conn *web
 	if config.GlobalConfig.Message.Format == "binary" {
 		messageType = websocket.BinaryMessage
 	}
-	log.Info(config.GlobalConfig.Message.Format)
-	log.Info(config.GlobalConfig.Message.Endian)
+	log.Logger.Info(config.GlobalConfig.Message.Format)
+	log.Logger.Info(config.GlobalConfig.Message.Endian)
 	echoConn := &connection{
 		ID:             id,
 		server:         server,
 		Conn:           conn,
 		messageType:    messageType,
 		messageHandler: NewMessageHandler(),
-		msgChan:        make(chan []byte),
+		sendMsgChan:    make(chan *[]byte),
 		exitChan:       make(chan bool),
 		isClosed:       false,
-		context:        context,
+		context:        context.Request().Context(),
 	}
 
 	echoConn.server.GetConnectionManager().Add(echoConn)

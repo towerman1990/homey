@@ -1,16 +1,23 @@
 package network
 
 type Request interface {
+
+	// get request belong connection
 	GetConnection() Connection
 
-	GetMessageData() []byte
+	// get message data type
+	GetMessageDataType() uint32
 
-	GetMessagePackageType() uint32
+	// get message data
+	GetMessageData() []byte
 }
 
 type request struct {
+
+	// request belong connection
 	conn Connection
 
+	// request contains message
 	msg Message
 }
 
@@ -22,6 +29,6 @@ func (r *request) GetMessageData() []byte {
 	return r.msg.GetData()
 }
 
-func (r *request) GetMessagePackageType() uint32 {
-	return r.msg.GetPackageType()
+func (r *request) GetMessageDataType() uint32 {
+	return r.msg.GetDataType()
 }
