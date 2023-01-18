@@ -1,9 +1,16 @@
 package network
 
 import (
+	"context"
+	"encoding/base64"
 	"time"
 
+	log "github.com/homey/logger"
+	"go.uber.org/zap"
+
 	"github.com/gorilla/websocket"
+	"github.com/homey/distribute"
+	"github.com/homey/service"
 	"github.com/homey/utils"
 	"github.com/labstack/echo/v4"
 )
@@ -17,10 +24,10 @@ type Server interface {
 	// get connection manager
 	GetConnectionManager() ConnectionManager
 
-	// set a function whitch could be called on a connection openning
+	// set a function it would be called on a connection openning
 	SetOnConnOpen(func(conn Connection))
 
-	// set a function whitch could be called on a connection closing
+	// set a function it would be called on a connection closing
 	SetOnConnClose(func(conn Connection))
 
 	// call function on connection openning
@@ -31,8 +38,13 @@ type Server interface {
 }
 
 type Homey struct {
+	Context context.Context
+
 	ConnectionManager
+
 	MessageHandler
+
+	ForwardMsgChan chan *[]byte
 }
 
 func (h *Homey) Stop() {
@@ -50,14 +62,53 @@ func (h *Homey) GetConnectionManager() ConnectionManager {
 func (h *Homey) SetOnConnOpen(func(conn Connection)) {
 
 }
+
 func (h *Homey) SetOnConnClose(func(conn Connection)) {
 
 }
+
 func (h *Homey) CallOnConnOpen(conn Connection) {
 
 }
+
 func (h *Homey) CallOnConnClose(conn Connection) {
 
+}
+
+func (h *Homey) Subscribe() {
+	rdb := service.GetRedisClient()
+	pubsub := rdb.Subscribe(h.Context, distribute.WorldChannel)
+	defer pubsub.Close()
+
+	for msg := range pubsub.Channel() {
+		data, err := base64.StdEncoding.DecodeString(msg.Payload)
+		if err != nil {
+			log.Logger.Error("failed to base64 decode message", zap.String("error", err.Error()))
+		}
+
+		h.ForwardMsgChan <- &data
+	}
+}
+
+func (h *Homey) ForwardMsgHandler() {
+	for {
+		select {
+		case data := <-h.ForwardMsgChan:
+			msg, err := UnPack(*data, true)
+			if err != nil {
+				log.Logger.Error("failed to unpack forward msg", zap.String("error", err.Error()))
+			}
+
+			if conn, err := h.ConnectionManager.Get(msg.GetConnID()); err == nil {
+				conn.SendMsg(*data)
+			}
+		}
+	}
+}
+
+func (h *Homey) Distribute() {
+	go h.Subscribe()
+	go h.ForwardMsgHandler()
 }
 
 func (h *Homey) Echo() echo.HandlerFunc {

@@ -3,7 +3,8 @@ package config
 import (
 	"os"
 
-	"github.com/labstack/gommon/log"
+	log "github.com/homey/logger"
+	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -17,20 +18,36 @@ type Message struct {
 }
 
 type TLV struct {
-	TypeByte   int8 `yaml:"type_byte"`
-	LengthByte int8 `yaml:"length_byte"`
+	Type   bool `yaml:"type"`
+	Length bool `yaml:"length"`
+}
+
+type Distribute struct {
+	Status bool   `yaml:"status"`
+	Way    string `yaml:"way"`
+}
+
+type Redis struct {
+	Addr           string `yaml:"addr"`
+	Password       string `yaml:"password"`
+	DB             int    `yaml:"db"`
+	WorldChannel   string `yaml:"world_channel"`
+	ForwardChannel string `yaml:"forward_channel"`
 }
 
 type Config struct {
+	Env              string `yaml:"env"`
 	WorkerPoolSize   uint32 `yaml:"worker_pool_size"`
 	MaxWorkerTaskLen uint32 `yaml:"max_worker_task_len"`
 	MaxPackageSize   uint32 `yaml:"max_package_size"`
-	Message          `yaml:"message"`
-	TLV              `yaml:"tlv"`
 }
 
 type Global struct {
-	Config `yaml:"config"`
+	Config     `yaml:"config"`
+	Message    `yaml:"message"`
+	TLV        `yaml:"tlv"`
+	Distribute `yaml:"distribute"`
+	Redis      `yaml:"redis"`
 }
 
 func init() {
@@ -40,34 +57,37 @@ func init() {
 func loadConfigFile() {
 	GlobalConfig = Global{
 		Config: Config{
+			Env:              "develop",
 			WorkerPoolSize:   0,
 			MaxWorkerTaskLen: 0,
-			MaxPackageSize:   4096,
-			Message: Message{
-				Format: "binary",
-				Endian: "little",
-			},
-			TLV: TLV{
-				TypeByte:   0,
-				LengthByte: 0,
-			},
+			MaxPackageSize:   4096},
+		Message: Message{
+			Format: "binary",
+			Endian: "little",
+		},
+		TLV: TLV{
+			Type:   false,
+			Length: false,
+		},
+		Redis: Redis{
+			Addr:           "localhost:6379:",
+			Password:       "",
+			DB:             0,
+			WorldChannel:   "world_channel",
+			ForwardChannel: "forward_channel",
 		},
 	}
 
-	configFile, err := os.ReadFile("../example/conf/homey.yml")
+	configFile, err := os.ReadFile("../example/conf/homey.yaml")
 	if err != nil {
-		log.Errorf("load config file failed, error: %v", err)
+
+		log.Logger.Error("load config file failed", zap.String("error", err.Error()))
 		return
 	}
 
 	err = yaml.Unmarshal(configFile, &GlobalConfig)
 	if err != nil {
-		log.Errorf("unmarshal config data failed, error: %v", err)
+		log.Logger.Error("unmarshal config data failed", zap.String("error", err.Error()))
 		return
-	}
-
-	if GlobalConfig.Message.Format != "binary" {
-		GlobalConfig.TLV.TypeByte = 0
-		GlobalConfig.TLV.LengthByte = 0
 	}
 }
