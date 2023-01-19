@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/homey/config"
+	"github.com/towerman1990/homey/config"
 )
 
 func TestPackAndUnPackData(t *testing.T) {

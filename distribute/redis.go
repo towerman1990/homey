@@ -5,10 +5,10 @@ import (
 	"encoding/base64"
 	"os"
 
-	log "github.com/homey/logger"
+	log "github.com/towerman1990/homey/logger"
 
 	"github.com/go-redis/redis/v9"
-	"github.com/homey/config"
+	"github.com/towerman1990/homey/config"
 	"go.uber.org/zap"
 )
 

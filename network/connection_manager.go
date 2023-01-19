@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	log "github.com/homey/logger"
+	log "github.com/towerman1990/homey/logger"
 	"go.uber.org/zap"
 )
 

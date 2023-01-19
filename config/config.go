@@ -61,7 +61,7 @@ func loadConfigFile() {
 			MaxWorkerTaskLen: 0,
 			MaxPackageSize:   4096},
 		Message: Message{
-			Format: "binary",
+			Format: "text",
 			Endian: "little",
 		},
 		TLV: TLV{
@@ -81,7 +81,7 @@ func loadConfigFile() {
 		},
 	}
 
-	configFile, err := os.ReadFile("../example/conf/homey.yaml")
+	configFile, err := os.ReadFile("./conf/homey.yaml")
 	if err != nil {
 		log.Printf("load config file failed, error: %v", err)
 		return

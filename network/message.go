@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/homey/config"
+	"github.com/towerman1990/homey/config"
 )
 
 var endian binary.ByteOrder

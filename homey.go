@@ -2,8 +2,8 @@ package homey
 
 import (
 	"github.com/gorilla/websocket"
-	"github.com/homey/config"
-	"github.com/homey/network"
+	"github.com/towerman1990/homey/config"
+	"github.com/towerman1990/homey/network"
 )
 
 func New() (homey *network.Homey) {

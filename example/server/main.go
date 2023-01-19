@@ -1,40 +1,22 @@
 package main
 
 import (
-	"fmt"
+	"log"
 
-	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/towerman1990/homey"
+	"github.com/towerman1990/homey/network"
 )
 
-var (
-	upgrader = websocket.Upgrader{}
-)
+type DefaultHandler struct {
+	network.BaseRouter
+}
 
-func hello(c echo.Context) (err error) {
-	ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
-	if err != nil {
-		return err
-	}
-	defer ws.Close()
-
-	for {
-		// Write
-		err = ws.WriteMessage(websocket.TextMessage, []byte("Hello, Client!"))
-		if err != nil {
-			c.Logger().Error(err)
-			return
-		}
-
-		// Read
-		_, msg, err := ws.ReadMessage()
-		if err != nil {
-			c.Logger().Error(err)
-			return err
-		}
-		fmt.Printf("%s\n", msg)
-	}
+func (dh *DefaultHandler) Handle(request network.Request) {
+	msg := string(request.GetMsgData())
+	log.Printf("receive request: %s", msg)
+	request.GetConnection().SendMsg([]byte("server received message: " + msg))
 }
 
 func main() {
@@ -45,10 +27,20 @@ func main() {
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 
+	h := homey.New()
+	h.SetOnConnOpen(OnConnectionAdd)
+
+	h.AddRouter(0, &DefaultHandler{})
+	h.MsgHandler.String()
+
 	// Routes
 	e.Static("/", "./public")
-	e.GET("/ws", hello)
+	e.GET("/ws", h.Echo())
 
 	// Start server
 	e.Logger.Fatal(e.Start(":8080"))
+}
+
+func OnConnectionAdd(conn network.Connection) {
+	log.Printf("call OnConnectionAdd function, call connection ID: %d", conn.GetID())
 }

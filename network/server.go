@@ -5,14 +5,14 @@ import (
 	"encoding/base64"
 	"os"
 
-	"github.com/homey/config"
-	log "github.com/homey/logger"
+	"github.com/towerman1990/homey/config"
+	log "github.com/towerman1990/homey/logger"
 	"go.uber.org/zap"
 
 	"github.com/gorilla/websocket"
-	"github.com/homey/distribute"
-	"github.com/homey/utils"
 	"github.com/labstack/echo/v4"
+	"github.com/towerman1990/homey/distribute"
+	"github.com/towerman1990/homey/utils"
 )
 
 var (
@@ -26,7 +26,9 @@ type (
 		GetMsgType() int
 
 		// get connection manager
-		GetConnManager() ConnectionManager
+		ConnectionManager() ConnectionManager
+
+		MessageHandler() MessageHandler
 
 		// set a function it would be called on http request arrive
 		SetOnInit(func(context.Context))
@@ -74,8 +76,12 @@ func (h *Homey) GetMsgType() int {
 	return h.msgType
 }
 
-func (h *Homey) GetConnManager() ConnectionManager {
+func (h *Homey) ConnectionManager() ConnectionManager {
 	return h.ConnManager
+}
+
+func (h *Homey) MessageHandler() MessageHandler {
+	return h.MsgHandler
 }
 
 func (h *Homey) SetOnInit(hookFunc func(context.Context)) {
@@ -112,9 +118,10 @@ func (h *Homey) Stop() {
 	h.ConnManager.Clear()
 }
 
-func (h *Homey) AddRouter(msgID uint32, router Router) error {
-	return h.MsgHandler.AddRouter(msgID, router)
+func (h *Homey) AddRouter(msgID uint32, router Router) {
+	h.MsgHandler.AddRouter(msgID, router)
 }
+
 func (h *Homey) Subscribe() {
 	rdb := distribute.GetRedisClient()
 	pubsub := rdb.Subscribe(h.Context(), distribute.WorldChannel)
@@ -158,7 +165,7 @@ func (h *Homey) Distribute() {
 
 func (h *Homey) Echo() echo.HandlerFunc {
 	return func(c echo.Context) (err error) {
-		ws, err := upgrader.Upgrade(c.Response(), c.Request(), c.Request().Header)
+		ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
 		if err != nil {
 			return err
 		}
@@ -171,7 +178,7 @@ func (h *Homey) Echo() echo.HandlerFunc {
 		h.MsgHandler.StartWorkPool()
 		conn := NewEchoConnection(id, h, c, ws)
 		defer conn.Close()
-		go conn.Open()
+		conn.Open()
 
 		return
 	}

@@ -3,8 +3,8 @@ package network
 import (
 	"fmt"
 
-	"github.com/homey/config"
-	log "github.com/homey/logger"
+	"github.com/towerman1990/homey/config"
+	log "github.com/towerman1990/homey/logger"
 	"go.uber.org/zap"
 )
 
@@ -14,13 +14,15 @@ type (
 		ExecHandler(request Request)
 
 		// add router
-		AddRouter(msgType uint32, router Router) error
+		AddRouter(msgType uint32, router Router)
 
 		// start work pool
 		StartWorkPool()
 
 		// send message to task queue, the message would be handled by worker
 		SendMsgToTaskQueue(Request)
+
+		String()
 	}
 
 	messageHandler struct {
@@ -36,8 +38,7 @@ func (mh *messageHandler) ExecHandler(request Request) {
 	dataType := request.GetMsgDataType()
 	handler, ok := mh.Handlers[dataType]
 	if !ok {
-		log.Logger.Warn("data type hasn't been added to router", zap.Uint32("message_type", dataType))
-
+		log.Logger.Warn("data type hasn't been bound on handler", zap.Uint32("dataType", dataType))
 		return
 	}
 
@@ -46,15 +47,13 @@ func (mh *messageHandler) ExecHandler(request Request) {
 	handler.PostHandle(request)
 }
 
-func (mh *messageHandler) AddRouter(dataType uint32, router Router) (err error) {
+func (mh *messageHandler) AddRouter(dataType uint32, router Router) {
 	if _, ok := mh.Handlers[dataType]; ok {
-		return fmt.Errorf("the message type [%d] has been added", dataType)
+		log.Logger.Error("the data type has been added", zap.Uint32("dataType", dataType))
 	}
 
 	mh.Handlers[dataType] = router
-	log.Logger.Info("added router successfully", zap.Uint32("message_type", dataType))
-
-	return
+	log.Logger.Info("added router successfully", zap.Uint32("dataType", dataType))
 }
 
 func (mh *messageHandler) StartWorkPool() {
@@ -65,7 +64,7 @@ func (mh *messageHandler) StartWorkPool() {
 }
 
 func (mh *messageHandler) StartOneWork(i int) {
-	log.Logger.Info("new worker started", zap.Int("worker_id", i))
+	log.Logger.Info("new worker started", zap.Int("workerID", i))
 
 	for request := range mh.TaskQueue[i] {
 		mh.ExecHandler(request)
@@ -75,6 +74,10 @@ func (mh *messageHandler) StartOneWork(i int) {
 func (mh *messageHandler) SendMsgToTaskQueue(request Request) {
 	workerID := request.GetConnection().GetID() % uint64(mh.WorkerPoolSize)
 	mh.TaskQueue[workerID] <- request
+}
+
+func (mh *messageHandler) String() {
+	fmt.Printf("mh.Handlers: %v\n", mh.Handlers)
 }
 
 func NewMessageHandler() MessageHandler {

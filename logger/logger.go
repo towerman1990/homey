@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/homey/config"
+	"github.com/towerman1990/homey/config"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )

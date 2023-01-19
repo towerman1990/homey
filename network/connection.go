@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/homey/config"
-	"github.com/homey/distribute"
-	log "github.com/homey/logger"
 	"github.com/labstack/echo/v4"
+	"github.com/towerman1990/homey/config"
+	"github.com/towerman1990/homey/distribute"
+	log "github.com/towerman1990/homey/logger"
 	"go.uber.org/zap"
 )
 
@@ -55,7 +55,7 @@ type (
 
 		Conn *websocket.Conn
 
-		msgHandler MessageHandler
+		// msgHandler MessageHandler
 
 		sendMsgChan chan *[]byte
 
@@ -76,7 +76,7 @@ func (c *connection) Open() {
 	go c.OpenWriter()
 
 	c.server.CallOnConnOpen(c)
-	// select {}
+	select {}
 }
 
 func (c *connection) Close() {
@@ -94,7 +94,7 @@ func (c *connection) Close() {
 
 	c.Conn.Close()
 
-	c.server.GetConnManager().Remove(c)
+	c.server.ConnectionManager().Remove(c)
 }
 
 func (c *connection) OpenReader() {
@@ -108,10 +108,7 @@ func (c *connection) OpenReader() {
 			return
 		}
 
-		if messageType != c.server.GetMsgType() {
-			log.Logger.Error("invalid message type", zap.Uint64("connection", c.ID), zap.String("error", "unsupport text message type"))
-			return
-		}
+		log.Logger.Info("received message", zap.Int("message type", messageType))
 
 		msg, err := UnPack(binaryMessage, false)
 		if err != nil {
@@ -125,9 +122,9 @@ func (c *connection) OpenReader() {
 		}
 
 		if config.GlobalConfig.WorkerPoolSize > 0 {
-			c.msgHandler.SendMsgToTaskQueue(req)
+			c.server.MessageHandler().SendMsgToTaskQueue(req)
 		} else {
-			go c.msgHandler.ExecHandler(req)
+			go c.server.MessageHandler().ExecHandler(req)
 		}
 	}
 }
@@ -189,14 +186,13 @@ func NewEchoConnection(id uint64, server Server, ctx echo.Context, conn *websock
 		ID:          id,
 		server:      server,
 		Conn:        conn,
-		msgHandler:  NewMessageHandler(),
 		sendMsgChan: make(chan *[]byte),
 		exitChan:    make(chan bool),
 		isClosed:    false,
 		ctx:         ctx.Request().Context(),
 	}
 
-	echoConn.server.GetConnManager().Add(echoConn)
+	echoConn.server.ConnectionManager().Add(echoConn)
 
 	return echoConn
 }
