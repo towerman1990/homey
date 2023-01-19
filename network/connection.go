@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -55,8 +56,6 @@ type (
 
 		Conn *websocket.Conn
 
-		// msgHandler MessageHandler
-
 		sendMsgChan chan *[]byte
 
 		exitChan chan bool
@@ -64,6 +63,10 @@ type (
 		isClosed bool
 
 		ctx context.Context
+
+		properties map[string]interface{}
+
+		propertyLock sync.RWMutex
 	}
 )
 
@@ -92,7 +95,10 @@ func (c *connection) Close() {
 	close(c.sendMsgChan)
 	close(c.exitChan)
 
-	c.Conn.Close()
+	err := c.Conn.Close()
+	if err != nil {
+		log.Logger.Error("close connection failed", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
+	}
 
 	c.server.ConnectionManager().Remove(c)
 }
@@ -159,7 +165,6 @@ func (c *connection) SendMsg(data []byte) (err error) {
 	}
 
 	c.sendMsgChan <- &data
-
 	return
 }
 
@@ -169,7 +174,6 @@ func (c *connection) SendForwardMsg(data []byte) (err error) {
 	}
 
 	err = distribute.PublishForwardMsg(c.ctx, data)
-
 	return
 }
 
@@ -179,6 +183,21 @@ func (c *connection) GetStatus() bool {
 
 func (c *connection) Context() context.Context {
 	return c.ctx
+}
+
+func (c *connection) SetProperty(key string, value interface{}) {
+	c.propertyLock.RLock()
+	defer c.propertyLock.RUnlock()
+
+	c.properties[key] = value
+}
+
+func (c *connection) GetProperty(key string) (value interface{}, ok bool) {
+	c.propertyLock.RLock()
+	defer c.propertyLock.RUnlock()
+
+	value, ok = c.properties[key]
+	return
 }
 
 func NewEchoConnection(id uint64, server Server, ctx echo.Context, conn *websocket.Conn) Connection {

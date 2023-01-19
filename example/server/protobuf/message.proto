@@ -1,0 +1,46 @@
+syntax = "proto3";
+package message;
+option go_package = "./pb";
+
+enum Code {
+  SUCCESS          = 0;
+  SERVER_ERROR     = 1;
+  PARAM_ERROR      = 2;
+  ROOM_INEXISTENCE = 3;
+  EXCEED_MAXIMUM   = 4;
+}
+
+message Login {
+}
+
+message Logout {
+}
+
+message EnterHome {
+  int64 home_id = 1;
+}
+
+message ClientMessage {
+  oneof payload {
+    Login     login      = 1;
+    Logout    logout     = 2;
+    EnterHome enter_hoom = 3;
+    KickUser  kick_user  = 4;
+  }
+}
+
+message KickUser {
+  int64  UserId = 1;
+}
+
+message ServerMessage {
+  oneof payload {
+    Ack      ack      = 1;
+    KickUser kick_user = 2;
+  }
+}
+
+message Ack {
+  Code   code  = 1;
+  string error = 2;
+}
