@@ -1,16 +1,18 @@
 package homey
 
 import (
-	"context"
-
+	"github.com/gorilla/websocket"
+	"github.com/homey/config"
 	"github.com/homey/network"
 )
 
-func New() *network.Homey {
-	return &network.Homey{
-		Context:           context.Background(),
-		ConnectionManager: network.NewConnectionManager(),
-		MessageHandler:    network.NewMessageHandler(),
-		ForwardMsgChan:    make(chan *[]byte),
+func New() (homey *network.Homey) {
+	messageType := websocket.BinaryMessage
+	if config.GlobalConfig.Message.Format == "text" {
+		messageType = websocket.TextMessage
 	}
+
+	homey = network.NewHomey(messageType)
+
+	return
 }

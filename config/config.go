@@ -1,10 +1,9 @@
 package config
 
 import (
+	"log"
 	"os"
 
-	log "github.com/homey/logger"
-	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -69,6 +68,10 @@ func loadConfigFile() {
 			Type:   false,
 			Length: false,
 		},
+		Distribute: Distribute{
+			Status: false,
+			Way:    "redis",
+		},
 		Redis: Redis{
 			Addr:           "localhost:6379:",
 			Password:       "",
@@ -80,14 +83,13 @@ func loadConfigFile() {
 
 	configFile, err := os.ReadFile("../example/conf/homey.yaml")
 	if err != nil {
-
-		log.Logger.Error("load config file failed", zap.String("error", err.Error()))
+		log.Printf("load config file failed, error: %v", err)
 		return
 	}
 
 	err = yaml.Unmarshal(configFile, &GlobalConfig)
 	if err != nil {
-		log.Logger.Error("unmarshal config data failed", zap.String("error", err.Error()))
+		log.Printf("unmarshal config data failed, error: %v", err)
 		return
 	}
 }

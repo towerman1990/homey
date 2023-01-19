@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/homey/config"
@@ -12,46 +13,59 @@ import (
 	"go.uber.org/zap"
 )
 
-type Connection interface {
+var (
+	// Time allowed to write a message to the peer.
+	WriteWait = 10 * time.Second
+	// Time allowed to read the next pong message from the peer.
+	PongWait = 60 * time.Second
+	// Send pings to peer with this period. Must be less than pongWait.
+	PingPeriod = (PongWait * 9) / 10
+	// Maximum message size allowed from peer.
+	MaxMessageSize int64 = 64 * 1024
+)
 
-	// get connecton ID
-	GetID() uint64
+type (
+	Connection interface {
 
-	// establish a connection between server and client
-	Open()
+		// get connecton ID
+		GetID() uint64
 
-	// close a connection
-	Close()
+		// establish a connection between server and client
+		Open()
 
-	// open connection reader
-	OpenReader()
+		// close a connection
+		Close()
 
-	// open connection writer
-	OpenWriter()
+		// reading message from websocket connection
+		OpenReader()
 
-	// server send message to client by connection
-	SendMsg(data []byte) error
-}
+		// prepare for writing message into websocket connection
+		OpenWriter()
 
-type connection struct {
-	ID uint64
+		// server send message to client by connection
+		SendMsg(data []byte) error
 
-	server Server
+		Context() context.Context
+	}
 
-	Conn *websocket.Conn
+	connection struct {
+		ID uint64
 
-	messageType int
+		server Server
 
-	messageHandler MessageHandler
+		Conn *websocket.Conn
 
-	sendMsgChan chan *[]byte
+		msgHandler MessageHandler
 
-	exitChan chan bool
+		sendMsgChan chan *[]byte
 
-	isClosed bool
+		exitChan chan bool
 
-	context context.Context
-}
+		isClosed bool
+
+		ctx context.Context
+	}
+)
 
 func (c *connection) GetID() uint64 {
 	return c.ID
@@ -62,17 +76,17 @@ func (c *connection) Open() {
 	go c.OpenWriter()
 
 	c.server.CallOnConnOpen(c)
-	select {}
+	// select {}
 }
 
 func (c *connection) Close() {
 	if c.isClosed {
 		return
 	}
-	c.isClosed = true
 
 	log.Logger.Info("close connection", zap.Uint64("connection", c.ID), zap.String("remote address", c.Conn.RemoteAddr().String()))
 
+	c.isClosed = true
 	c.exitChan <- true
 
 	close(c.sendMsgChan)
@@ -80,10 +94,11 @@ func (c *connection) Close() {
 
 	c.Conn.Close()
 
-	c.server.GetConnectionManager().Remove(c)
+	c.server.GetConnManager().Remove(c)
 }
 
 func (c *connection) OpenReader() {
+	defer c.Close()
 	defer log.Logger.Info("close connection reader", zap.Uint64("id", c.ID))
 
 	for {
@@ -93,7 +108,7 @@ func (c *connection) OpenReader() {
 			return
 		}
 
-		if messageType == websocket.TextMessage && config.GlobalConfig.Message.Format != "text" {
+		if messageType != c.server.GetMsgType() {
 			log.Logger.Error("invalid message type", zap.Uint64("connection", c.ID), zap.String("error", "unsupport text message type"))
 			return
 		}
@@ -110,21 +125,29 @@ func (c *connection) OpenReader() {
 		}
 
 		if config.GlobalConfig.WorkerPoolSize > 0 {
-			c.messageHandler.SendMsgToTaskQueue(req)
+			c.msgHandler.SendMsgToTaskQueue(req)
 		} else {
-			go c.messageHandler.ExecHandler(req)
+			go c.msgHandler.ExecHandler(req)
 		}
 	}
 }
 
 func (c *connection) OpenWriter() {
 	defer log.Logger.Info("close connection writer", zap.Uint64("id", c.ID))
+	ticker := time.NewTicker(PingPeriod)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case data := <-c.sendMsgChan:
-			if err := c.Conn.WriteMessage(c.messageType, *data); err != nil {
+			if err := c.Conn.WriteMessage(c.server.GetMsgType(), *data); err != nil {
 				log.Logger.Error("failed to write message", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
+				c.Close()
+				return
+			}
+		case <-ticker.C:
+			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Logger.Error("failed to ping client", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
 				return
 			}
 		case <-c.exitChan:
@@ -148,7 +171,7 @@ func (c *connection) SendForwardMsg(data []byte) (err error) {
 		return fmt.Errorf("connection [%d] has closed", c.ID)
 	}
 
-	err = distribute.PublishForwardMsg(c.context, data)
+	err = distribute.PublishForwardMsg(c.ctx, data)
 
 	return
 }
@@ -157,26 +180,23 @@ func (c *connection) GetStatus() bool {
 	return c.isClosed
 }
 
-func NewEchoConnection(id uint64, server Server, context echo.Context, conn *websocket.Conn) Connection {
-	messageType := websocket.TextMessage
-	if config.GlobalConfig.Message.Format == "binary" {
-		messageType = websocket.BinaryMessage
-	}
-	log.Logger.Info(config.GlobalConfig.Message.Format)
-	log.Logger.Info(config.GlobalConfig.Message.Endian)
+func (c *connection) Context() context.Context {
+	return c.ctx
+}
+
+func NewEchoConnection(id uint64, server Server, ctx echo.Context, conn *websocket.Conn) Connection {
 	echoConn := &connection{
-		ID:             id,
-		server:         server,
-		Conn:           conn,
-		messageType:    messageType,
-		messageHandler: NewMessageHandler(),
-		sendMsgChan:    make(chan *[]byte),
-		exitChan:       make(chan bool),
-		isClosed:       false,
-		context:        context.Request().Context(),
+		ID:          id,
+		server:      server,
+		Conn:        conn,
+		msgHandler:  NewMessageHandler(),
+		sendMsgChan: make(chan *[]byte),
+		exitChan:    make(chan bool),
+		isClosed:    false,
+		ctx:         ctx.Request().Context(),
 	}
 
-	echoConn.server.GetConnectionManager().Add(echoConn)
+	echoConn.server.GetConnManager().Add(echoConn)
 
 	return echoConn
 }

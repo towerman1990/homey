@@ -8,29 +8,35 @@ import (
 	"go.uber.org/zap"
 )
 
-type MessageHandler interface {
-	ExecHandler(request Request)
+type (
+	MessageHandler interface {
+		// execute handler function
+		ExecHandler(request Request)
 
-	AddRouter(msgID uint32, router Router) error
+		// add router
+		AddRouter(msgType uint32, router Router) error
 
-	StartWorkPool()
+		// start work pool
+		StartWorkPool()
 
-	SendMsgToTaskQueue(Request)
-}
+		// send message to task queue, the message would be handled by worker
+		SendMsgToTaskQueue(Request)
+	}
 
-type messageHandler struct {
-	Handlers map[uint32]Router
+	messageHandler struct {
+		Handlers map[uint32]Router
 
-	TaskQueue []chan Request
+		TaskQueue []chan Request
 
-	WorkerPoolSize uint32
-}
+		WorkerPoolSize uint32
+	}
+)
 
 func (mh *messageHandler) ExecHandler(request Request) {
-	dataType := request.GetMessageDataType()
+	dataType := request.GetMsgDataType()
 	handler, ok := mh.Handlers[dataType]
 	if !ok {
-		log.Logger.Warn("data type hasn't been added to router", zap.Uint32("data_type", dataType))
+		log.Logger.Warn("data type hasn't been added to router", zap.Uint32("message_type", dataType))
 
 		return
 	}
@@ -42,11 +48,11 @@ func (mh *messageHandler) ExecHandler(request Request) {
 
 func (mh *messageHandler) AddRouter(dataType uint32, router Router) (err error) {
 	if _, ok := mh.Handlers[dataType]; ok {
-		return fmt.Errorf("the data type [%d] has been added", dataType)
+		return fmt.Errorf("the message type [%d] has been added", dataType)
 	}
 
 	mh.Handlers[dataType] = router
-	log.Logger.Info("added router successfully", zap.Uint32("data_type", dataType))
+	log.Logger.Info("added router successfully", zap.Uint32("message_type", dataType))
 
 	return
 }

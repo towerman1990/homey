@@ -7,7 +7,7 @@ import (
 	"github.com/homey/config"
 )
 
-func TestDataPack(t *testing.T) {
+func TestPackAndUnPackData(t *testing.T) {
 	// test message pack & unpack use little endian
 	t.Log(config.GlobalConfig.TLV.Type)
 	t.Log(config.GlobalConfig.TLV.Length)

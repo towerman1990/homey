@@ -8,30 +8,32 @@ import (
 	"go.uber.org/zap"
 )
 
-type ConnectionManager interface {
+type (
+	ConnectionManager interface {
 
-	// add a connection into connection manager
-	Add(Connection)
+		// add a connection into connection manager
+		Add(Connection)
 
-	// remove a connection from connection manager
-	Remove(Connection)
+		// remove a connection from connection manager
+		Remove(Connection)
 
-	// get a connection by connection ID
-	Get(uint64) (Connection, error)
+		// get a connection by connection ID
+		Get(uint64) (Connection, error)
 
-	// count how many connections in total
-	Count() int
+		// count how many connections in total
+		Count() int
 
-	// disconnect all connections
-	Clear()
-}
+		// disconnect all connections
+		Clear()
+	}
 
-type connectionManager struct {
-	// all alive connections collection
-	connections map[uint64]Connection
+	connectionManager struct {
+		// all alive connections collection
+		connections map[uint64]Connection
 
-	lock sync.RWMutex
-}
+		lock sync.RWMutex
+	}
+)
 
 func (cm *connectionManager) Add(conn Connection) {
 	cm.lock.Lock()

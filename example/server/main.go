@@ -12,7 +12,7 @@ var (
 	upgrader = websocket.Upgrader{}
 )
 
-func hello(c echo.Context) error {
+func hello(c echo.Context) (err error) {
 	ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
 	if err != nil {
 		return err
@@ -21,15 +21,17 @@ func hello(c echo.Context) error {
 
 	for {
 		// Write
-		err := ws.WriteMessage(websocket.TextMessage, []byte("Hello, Client!"))
+		err = ws.WriteMessage(websocket.TextMessage, []byte("Hello, Client!"))
 		if err != nil {
 			c.Logger().Error(err)
+			return
 		}
 
 		// Read
 		_, msg, err := ws.ReadMessage()
 		if err != nil {
 			c.Logger().Error(err)
+			return err
 		}
 		fmt.Printf("%s\n", msg)
 	}
@@ -48,5 +50,5 @@ func main() {
 	e.GET("/ws", hello)
 
 	// Start server
-	e.Logger.Fatal(e.Start(":1323"))
+	e.Logger.Fatal(e.Start(":8080"))
 }

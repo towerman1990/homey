@@ -1,14 +1,16 @@
 package network
 
-type Router interface {
-	PreHandle(request Request)
+type (
+	Router interface {
+		PreHandle(request Request)
 
-	Handle(request Request)
+		Handle(request Request)
 
-	PostHandle(request Request)
-}
+		PostHandle(request Request)
+	}
 
-type BaseRouter struct{}
+	BaseRouter struct{}
+)
 
 func (br *BaseRouter) PreHandle(request Request) {}
 
