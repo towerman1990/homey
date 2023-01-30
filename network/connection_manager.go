@@ -57,7 +57,7 @@ func (cm *connectionManager) Get(connID uint64) (conn Connection, err error) {
 		return conn, err
 	}
 
-	return conn, fmt.Errorf("connection [%d] added failed", connID)
+	return conn, fmt.Errorf("connection [%d] not found", connID)
 }
 
 func (cm *connectionManager) Count() int {

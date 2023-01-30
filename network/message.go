@@ -58,7 +58,7 @@ type (
 )
 
 func init() {
-	if config.GlobalConfig.Message.Endian == "little" {
+	if config.Global.Message.Endian == "little" {
 		endian = binary.LittleEndian
 	} else {
 		endian = binary.BigEndian
@@ -122,13 +122,13 @@ func Pack(message Message) (packageData []byte, err error) {
 		}
 	}
 
-	if config.GlobalConfig.TLV.Type {
+	if config.Global.TLV.Type {
 		if err := binary.Write(dataBuff, endian, message.GetDataType()); err != nil {
 			return packageData, err
 		}
 	}
 
-	if config.GlobalConfig.TLV.Length {
+	if config.Global.TLV.Length {
 		if err := binary.Write(dataBuff, endian, message.GetDataLength()); err != nil {
 			return packageData, err
 		}
@@ -153,13 +153,13 @@ func UnPack(binaryData []byte, isForward bool) (Message, error) {
 		}
 	}
 
-	if config.GlobalConfig.TLV.Type {
+	if config.Global.TLV.Type {
 		if err := binary.Read(dataBuff, endian, &message.DataType); err != nil {
 			return message, err
 		}
 	}
 
-	if config.GlobalConfig.TLV.Length {
+	if config.Global.TLV.Length {
 		if err := binary.Read(dataBuff, endian, &message.DataLength); err != nil {
 			return message, err
 		}
@@ -170,7 +170,7 @@ func UnPack(binaryData []byte, isForward bool) (Message, error) {
 		}
 	}
 
-	if config.GlobalConfig.MaxPackageSize > 0 && message.DataLength > config.GlobalConfig.MaxPackageSize {
+	if config.Global.MaxPackageSize > 0 && message.DataLength > config.Global.MaxPackageSize {
 		return message, fmt.Errorf("message data length [%d] beyond max package size limit", message.DataLength)
 	}
 

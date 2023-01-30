@@ -19,16 +19,16 @@ var (
 )
 
 func init() {
-	WorldChannel = config.GlobalConfig.Redis.WorldChannel
-	ForwardChannel = config.GlobalConfig.Redis.ForwardChannel
+	WorldChannel = config.Global.Redis.WorldChannel
+	ForwardChannel = config.Global.Redis.ForwardChannel
 
 	redisClient = redis.NewClient(&redis.Options{
-		Addr:     config.GlobalConfig.Redis.Addr,
-		Password: config.GlobalConfig.Redis.Password,
-		DB:       config.GlobalConfig.Redis.DB,
+		Addr:     config.Global.Redis.Addr,
+		Password: config.Global.Redis.Password,
+		DB:       config.Global.Redis.DB,
 	})
 
-	if config.GlobalConfig.Distribute.Status {
+	if config.Global.Distribute.Status {
 		if statusCmd := redisClient.Ping(context.Background()); statusCmd.Err() != nil {
 			log.Logger.Error("failed to ping redis server", zap.String("error", statusCmd.Err().Error()))
 			os.Exit(1)

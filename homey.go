@@ -8,11 +8,12 @@ import (
 
 func New() (homey *network.Homey) {
 	messageType := websocket.BinaryMessage
-	if config.GlobalConfig.Message.Format == "text" {
+	if config.Global.Message.Format == "text" {
 		messageType = websocket.TextMessage
 	}
 
 	homey = network.NewHomey(messageType)
+	homey.MsgHandler.StartWorkPool()
 
 	return
 }

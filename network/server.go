@@ -58,7 +58,7 @@ type (
 
 		MsgHandler MessageHandler
 
-		ForwardMsgChan chan *[]byte
+		RedirectMsgChan chan *[]byte
 
 		OnInit func(context.Context)
 
@@ -122,9 +122,9 @@ func (h *Homey) AddRouter(msgID uint32, router Router) {
 	h.MsgHandler.AddRouter(msgID, router)
 }
 
-func (h *Homey) Subscribe() {
+func (h *Homey) SubscribeWorldChannel() {
 	rdb := distribute.GetRedisClient()
-	pubsub := rdb.Subscribe(h.Context(), distribute.WorldChannel)
+	pubsub := rdb.Subscribe(h.ctx, distribute.WorldChannel)
 	defer pubsub.Close()
 
 	for msg := range pubsub.Channel() {
@@ -133,14 +133,14 @@ func (h *Homey) Subscribe() {
 			log.Logger.Error("failed to base64 decode message", zap.String("error", err.Error()))
 		}
 
-		h.ForwardMsgChan <- &data
+		h.RedirectMsgChan <- &data
 	}
 }
 
-func (h *Homey) ForwardMsgHandler() {
+func (h *Homey) RedirectMsgHandler() {
 	for {
 		select {
-		case data := <-h.ForwardMsgChan:
+		case data := <-h.RedirectMsgChan:
 			msg, err := UnPack(*data, true)
 			if err != nil {
 				log.Logger.Error("failed to unpack forward msg", zap.String("error", err.Error()))
@@ -154,13 +154,13 @@ func (h *Homey) ForwardMsgHandler() {
 }
 
 func (h *Homey) Distribute() {
-	if !config.GlobalConfig.Distribute.Status {
+	if !config.Global.Distribute.Status {
 		log.Logger.Error("distribute status is false, please set the value true and configurate redis")
 		os.Exit(1)
 	}
 
-	go h.Subscribe()
-	go h.ForwardMsgHandler()
+	go h.SubscribeWorldChannel()
+	go h.RedirectMsgHandler()
 }
 
 func (h *Homey) Echo() echo.HandlerFunc {
@@ -175,7 +175,6 @@ func (h *Homey) Echo() echo.HandlerFunc {
 			return err
 		}
 
-		h.MsgHandler.StartWorkPool()
 		conn := NewEchoConnection(id, h, c, ws)
 		defer conn.Close()
 		conn.Open()
@@ -186,10 +185,10 @@ func (h *Homey) Echo() echo.HandlerFunc {
 
 func NewHomey(messageType int) *Homey {
 	return &Homey{
-		ctx:            context.Background(),
-		msgType:        messageType,
-		ConnManager:    NewConnectionManager(),
-		MsgHandler:     NewMessageHandler(),
-		ForwardMsgChan: make(chan *[]byte),
+		ctx:             context.Background(),
+		msgType:         messageType,
+		ConnManager:     NewConnectionManager(),
+		MsgHandler:      NewMessageHandler(),
+		RedirectMsgChan: make(chan *[]byte),
 	}
 }

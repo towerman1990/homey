@@ -13,10 +13,12 @@ type DefaultHandler struct {
 	network.BaseRouter
 }
 
-func (dh *DefaultHandler) Handle(request network.Request) {
+func (dh *DefaultHandler) Handle(request network.Request) (err error) {
 	msg := string(request.GetMsgData())
 	log.Printf("receive request: %s", msg)
 	request.GetConnection().SendMsg([]byte("server received message: " + msg))
+
+	return
 }
 
 func main() {

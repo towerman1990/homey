@@ -5,12 +5,12 @@ import (
 )
 
 func TestConfig(t *testing.T) {
-	if GlobalConfig.WorkerPoolSize != 12 {
-		t.Errorf("expected be 12, but %d got", GlobalConfig.WorkerPoolSize)
+	if Global.WorkerPoolSize != 12 {
+		t.Errorf("expected be 12, but %d got", Global.WorkerPoolSize)
 	}
 
-	if GlobalConfig.Message.Format != "binary" {
-		t.Errorf("expected be text, but %s got", GlobalConfig.Message.Format)
+	if Global.Message.Format != "binary" {
+		t.Errorf("expected be text, but %s got", Global.Message.Format)
 	}
 
 }

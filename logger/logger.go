@@ -16,7 +16,7 @@ func init() {
 	sync := getWriteSync()
 
 	var level zapcore.Level
-	if config.GlobalConfig.Config.Env == "dev" || config.GlobalConfig.Config.Env == "develop" {
+	if config.Global.Framework.Env == "dev" || config.Global.Framework.Env == "develop" {
 		level = zapcore.DebugLevel
 	} else {
 		level = zapcore.InfoLevel

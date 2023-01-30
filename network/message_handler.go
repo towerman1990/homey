@@ -42,9 +42,20 @@ func (mh *messageHandler) ExecHandler(request Request) {
 		return
 	}
 
-	handler.PreHandle(request)
-	handler.Handle(request)
-	handler.PostHandle(request)
+	if err := handler.PreHandle(request); err != nil {
+		log.Logger.Error("failed to execute PreHandle function", zap.String("error", err.Error()))
+		return
+	}
+
+	if err := handler.Handle(request); err != nil {
+		log.Logger.Error("failed to execute PreHandle function", zap.String("error", err.Error()))
+		return
+	}
+
+	if err := handler.PostHandle(request); err != nil {
+		log.Logger.Error("failed to execute PreHandle function", zap.String("error", err.Error()))
+		return
+	}
 }
 
 func (mh *messageHandler) AddRouter(dataType uint32, router Router) {
@@ -58,7 +69,7 @@ func (mh *messageHandler) AddRouter(dataType uint32, router Router) {
 
 func (mh *messageHandler) StartWorkPool() {
 	for i := 0; i < int(mh.WorkerPoolSize); i++ {
-		mh.TaskQueue[i] = make(chan Request, config.GlobalConfig.MaxWorkerTaskLen)
+		mh.TaskQueue[i] = make(chan Request, config.Global.MaxWorkerTaskLen)
 		go mh.StartOneWork(i)
 	}
 }
@@ -83,7 +94,7 @@ func (mh *messageHandler) String() {
 func NewMessageHandler() MessageHandler {
 	return &messageHandler{
 		Handlers:       make(map[uint32]Router),
-		WorkerPoolSize: config.GlobalConfig.WorkerPoolSize,
-		TaskQueue:      make([]chan Request, config.GlobalConfig.MaxWorkerTaskLen),
+		WorkerPoolSize: config.Global.WorkerPoolSize,
+		TaskQueue:      make([]chan Request, config.Global.MaxWorkerTaskLen),
 	}
 }

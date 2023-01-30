@@ -127,7 +127,7 @@ func (c *connection) OpenReader() {
 			msg:  msg,
 		}
 
-		if config.GlobalConfig.WorkerPoolSize > 0 {
+		if config.Global.WorkerPoolSize > 0 {
 			c.server.MessageHandler().SendMsgToTaskQueue(req)
 		} else {
 			go c.server.MessageHandler().ExecHandler(req)

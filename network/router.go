@@ -2,18 +2,25 @@ package network
 
 type (
 	Router interface {
-		PreHandle(request Request)
+		// hook function
+		PreHandle(request Request) error
 
-		Handle(request Request)
+		Handle(request Request) error
 
-		PostHandle(request Request)
+		PostHandle(request Request) error
 	}
 
 	BaseRouter struct{}
 )
 
-func (br *BaseRouter) PreHandle(request Request) {}
+func (br *BaseRouter) PreHandle(request Request) (err error) {
+	return
+}
 
-func (br *BaseRouter) Handle(request Request) {}
+func (br *BaseRouter) Handle(request Request) (err error) {
+	return
+}
 
-func (br *BaseRouter) PostHandle(request Request) {}
+func (br *BaseRouter) PostHandle(request Request) (err error) {
+	return
+}

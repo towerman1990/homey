@@ -8,7 +8,7 @@ import (
 )
 
 var (
-	GlobalConfig Global
+	Global GlobalConfig
 )
 
 type Message struct {
@@ -34,15 +34,15 @@ type Redis struct {
 	ForwardChannel string `yaml:"forward_channel"`
 }
 
-type Config struct {
+type Framework struct {
 	Env              string `yaml:"env"`
 	WorkerPoolSize   uint32 `yaml:"worker_pool_size"`
 	MaxWorkerTaskLen uint32 `yaml:"max_worker_task_len"`
 	MaxPackageSize   uint32 `yaml:"max_package_size"`
 }
 
-type Global struct {
-	Config     `yaml:"config"`
+type GlobalConfig struct {
+	Framework  `yaml:"framework"`
 	Message    `yaml:"message"`
 	TLV        `yaml:"tlv"`
 	Distribute `yaml:"distribute"`
@@ -54,8 +54,8 @@ func init() {
 }
 
 func loadConfigFile() {
-	GlobalConfig = Global{
-		Config: Config{
+	Global = GlobalConfig{
+		Framework: Framework{
 			Env:              "develop",
 			WorkerPoolSize:   0,
 			MaxWorkerTaskLen: 0,
@@ -87,7 +87,7 @@ func loadConfigFile() {
 		return
 	}
 
-	err = yaml.Unmarshal(configFile, &GlobalConfig)
+	err = yaml.Unmarshal(configFile, &Global)
 	if err != nil {
 		log.Printf("unmarshal config data failed, error: %v", err)
 		return
