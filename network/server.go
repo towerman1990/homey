@@ -34,7 +34,7 @@ type (
 		SetOnInit(func(context.Context))
 
 		// set a function it would be called on a connection openning
-		SetOnConnOpen(func(conn Connection))
+		SetOnConnOpen(func(conn Connection) error)
 
 		// set a function it would be called on a connection closing
 		SetOnConnClose(func(conn Connection))
@@ -43,7 +43,7 @@ type (
 		CallOnInit(context.Context)
 
 		// call this function on connection openning
-		CallOnConnOpen(Connection)
+		CallOnConnOpen(Connection) error
 
 		// call this function on connection closing
 		CallOnConnClose(Connection)
@@ -62,7 +62,7 @@ type (
 
 		OnInit func(context.Context)
 
-		OnConnOpen func(Connection)
+		OnConnOpen func(Connection) error
 
 		OnConnClose func(Connection)
 	}
@@ -88,7 +88,7 @@ func (h *Homey) SetOnInit(hookFunc func(context.Context)) {
 	h.OnInit = hookFunc
 }
 
-func (h *Homey) SetOnConnOpen(hookFunc func(Connection)) {
+func (h *Homey) SetOnConnOpen(hookFunc func(Connection) error) {
 	h.OnConnOpen = hookFunc
 }
 
@@ -102,10 +102,12 @@ func (h *Homey) CallOnInit(ctx context.Context) {
 	}
 }
 
-func (h *Homey) CallOnConnOpen(conn Connection) {
+func (h *Homey) CallOnConnOpen(conn Connection) (err error) {
 	if h.OnConnOpen != nil {
-		h.OnConnOpen(conn)
+		return h.OnConnOpen(conn)
 	}
+
+	return
 }
 
 func (h *Homey) CallOnConnClose(conn Connection) {
@@ -175,7 +177,7 @@ func (h *Homey) Echo() echo.HandlerFunc {
 			return err
 		}
 
-		conn := NewEchoConnection(id, h, c, ws)
+		conn := NewEchoConnection(id, h, ws)
 		defer conn.Close()
 		conn.Open()
 

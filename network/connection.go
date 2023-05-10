@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/labstack/echo/v4"
 	"github.com/towerman1990/homey/config"
 	"github.com/towerman1990/homey/distribute"
 	log "github.com/towerman1990/homey/logger"
@@ -38,10 +37,10 @@ type (
 		Close()
 
 		// reading message from websocket connection
-		OpenReader()
+		StartReader()
 
 		// prepare for writing message into websocket connection
-		OpenWriter()
+		StartWriter()
 
 		// server send message to client by connection
 		SendMsg(data []byte) error
@@ -58,15 +57,17 @@ type (
 
 		sendMsgChan chan *[]byte
 
-		exitChan chan bool
-
-		isClosed bool
-
 		ctx context.Context
+
+		cancel context.CancelFunc
 
 		properties map[string]interface{}
 
+		sync.RWMutex
+
 		propertyLock sync.RWMutex
+
+		isClosed bool
 	}
 )
 
@@ -75,35 +76,49 @@ func (c *connection) GetID() uint64 {
 }
 
 func (c *connection) Open() {
-	go c.OpenReader()
-	go c.OpenWriter()
+	c.ctx, c.cancel = context.WithCancel(context.Background())
 
-	c.server.CallOnConnOpen(c)
-	select {}
-}
-
-func (c *connection) Close() {
-	if c.isClosed {
+	if err := c.server.CallOnConnOpen(c); err != nil {
+		log.Logger.Warn("connection [%d] open failed, error: %v", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
 		return
 	}
 
-	log.Logger.Info("close connection", zap.Uint64("connection", c.ID), zap.String("remote address", c.Conn.RemoteAddr().String()))
+	go c.StartReader()
+	go c.StartWriter()
 
-	c.isClosed = true
-	c.exitChan <- true
+	select {
+	case <-c.ctx.Done():
+		c.finalizer()
+		return
+	}
+}
 
+func (c *connection) Close() {
+	c.cancel()
+}
+
+func (c *connection) finalizer() {
+	c.server.CallOnConnClose(c)
+
+	c.Lock()
+	defer c.Unlock()
+
+	if c.isClosed == true {
+		return
+	}
+
+	log.Logger.Info("ready to close connection", zap.Uint64("connection", c.ID), zap.String("remote addr", c.Conn.RemoteAddr().String()))
 	close(c.sendMsgChan)
-	close(c.exitChan)
-
 	err := c.Conn.Close()
 	if err != nil {
-		log.Logger.Error("close connection failed", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
+		log.Logger.Error("close connection [%d] failed, error: %v", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
 	}
+	c.isClosed = true
 
 	c.server.ConnectionManager().Remove(c)
 }
 
-func (c *connection) OpenReader() {
+func (c *connection) StartReader() {
 	defer c.Close()
 	defer log.Logger.Info("close connection reader", zap.Uint64("id", c.ID))
 
@@ -135,7 +150,7 @@ func (c *connection) OpenReader() {
 	}
 }
 
-func (c *connection) OpenWriter() {
+func (c *connection) StartWriter() {
 	defer log.Logger.Info("close connection writer", zap.Uint64("id", c.ID))
 	ticker := time.NewTicker(PingPeriod)
 	defer ticker.Stop()
@@ -153,7 +168,7 @@ func (c *connection) OpenWriter() {
 				log.Logger.Error("failed to ping client", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
 				return
 			}
-		case <-c.exitChan:
+		case <-c.ctx.Done():
 			return
 		}
 	}
@@ -200,17 +215,13 @@ func (c *connection) GetProperty(key string) (value interface{}, ok bool) {
 	return
 }
 
-func NewEchoConnection(id uint64, server Server, ctx echo.Context, conn *websocket.Conn) Connection {
+func NewEchoConnection(id uint64, server Server, conn *websocket.Conn) Connection {
 	echoConn := &connection{
 		ID:          id,
 		server:      server,
 		Conn:        conn,
 		sendMsgChan: make(chan *[]byte),
-		exitChan:    make(chan bool),
-		isClosed:    false,
-		ctx:         ctx.Request().Context(),
 	}
-
 	echoConn.server.ConnectionManager().Add(echoConn)
 
 	return echoConn

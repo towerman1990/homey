@@ -43,6 +43,7 @@ func main() {
 	e.Logger.Fatal(e.Start(":8080"))
 }
 
-func OnConnectionAdd(conn network.Connection) {
+func OnConnectionAdd(conn network.Connection) (err error) {
 	log.Printf("call OnConnectionAdd function, call connection ID: %d", conn.GetID())
+	return
 }
