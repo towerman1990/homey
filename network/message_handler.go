@@ -3,63 +3,79 @@ package network
 import (
 	"fmt"
 
-	"github.com/homey/config"
-	log "github.com/homey/logger"
+	"github.com/towerman1990/homey/config"
+	log "github.com/towerman1990/homey/logger"
 	"go.uber.org/zap"
 )
 
-type MessageHandler interface {
-	ExecHandler(request Request)
+type (
+	MessageHandler interface {
+		// execute handler function
+		ExecHandler(request Request)
 
-	AddRouter(msgID uint32, router Router) error
+		// add router
+		AddRouter(msgType uint32, router Router)
 
-	StartWorkPool()
+		// start work pool
+		StartWorkPool()
 
-	SendMsgToTaskQueue(Request)
-}
+		// send message to task queue, the message would be handled by worker
+		SendMsgToTaskQueue(Request)
 
-type messageHandler struct {
-	Handlers map[uint32]Router
+		String()
+	}
 
-	TaskQueue []chan Request
+	messageHandler struct {
+		Handlers map[uint32]Router
 
-	WorkerPoolSize uint32
-}
+		TaskQueue []chan Request
+
+		WorkerPoolSize uint32
+	}
+)
 
 func (mh *messageHandler) ExecHandler(request Request) {
-	dataType := request.GetMessageDataType()
+	dataType := request.GetMsgDataType()
 	handler, ok := mh.Handlers[dataType]
 	if !ok {
-		log.Logger.Warn("data type hasn't been added to router", zap.Uint32("data_type", dataType))
-
+		log.Logger.Warn("data type hasn't been bound on handler", zap.Uint32("dataType", dataType))
 		return
 	}
 
-	handler.PreHandle(request)
-	handler.Handle(request)
-	handler.PostHandle(request)
+	if err := handler.PreHandle(request); err != nil {
+		log.Logger.Error("failed to execute PreHandle function", zap.String("error", err.Error()))
+		return
+	}
+
+	if err := handler.Handle(request); err != nil {
+		log.Logger.Error("failed to execute PreHandle function", zap.String("error", err.Error()))
+		return
+	}
+
+	if err := handler.PostHandle(request); err != nil {
+		log.Logger.Error("failed to execute PreHandle function", zap.String("error", err.Error()))
+		return
+	}
 }
 
-func (mh *messageHandler) AddRouter(dataType uint32, router Router) (err error) {
+func (mh *messageHandler) AddRouter(dataType uint32, router Router) {
 	if _, ok := mh.Handlers[dataType]; ok {
-		return fmt.Errorf("the data type [%d] has been added", dataType)
+		log.Logger.Error("the data type has been added", zap.Uint32("dataType", dataType))
 	}
 
 	mh.Handlers[dataType] = router
-	log.Logger.Info("added router successfully", zap.Uint32("data_type", dataType))
-
-	return
+	log.Logger.Info("added router successfully", zap.Uint32("dataType", dataType))
 }
 
 func (mh *messageHandler) StartWorkPool() {
 	for i := 0; i < int(mh.WorkerPoolSize); i++ {
-		mh.TaskQueue[i] = make(chan Request, config.GlobalConfig.MaxWorkerTaskLen)
+		mh.TaskQueue[i] = make(chan Request, config.Global.MaxWorkerTaskLen)
 		go mh.StartOneWork(i)
 	}
 }
 
 func (mh *messageHandler) StartOneWork(i int) {
-	log.Logger.Info("new worker started", zap.Int("worker_id", i))
+	log.Logger.Info("new worker started", zap.Int("workerID", i))
 
 	for request := range mh.TaskQueue[i] {
 		mh.ExecHandler(request)
@@ -71,10 +87,14 @@ func (mh *messageHandler) SendMsgToTaskQueue(request Request) {
 	mh.TaskQueue[workerID] <- request
 }
 
+func (mh *messageHandler) String() {
+	fmt.Printf("mh.Handlers: %v\n", mh.Handlers)
+}
+
 func NewMessageHandler() MessageHandler {
 	return &messageHandler{
 		Handlers:       make(map[uint32]Router),
-		WorkerPoolSize: config.GlobalConfig.WorkerPoolSize,
-		TaskQueue:      make([]chan Request, config.GlobalConfig.MaxWorkerTaskLen),
+		WorkerPoolSize: config.Global.WorkerPoolSize,
+		TaskQueue:      make([]chan Request, config.Global.MaxWorkerTaskLen),
 	}
 }

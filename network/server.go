@@ -3,81 +3,130 @@ package network
 import (
 	"context"
 	"encoding/base64"
-	"time"
+	"os"
 
-	log "github.com/homey/logger"
+	"github.com/towerman1990/homey/config"
+	log "github.com/towerman1990/homey/logger"
 	"go.uber.org/zap"
 
 	"github.com/gorilla/websocket"
-	"github.com/homey/distribute"
-	"github.com/homey/service"
-	"github.com/homey/utils"
 	"github.com/labstack/echo/v4"
+	"github.com/towerman1990/homey/distribute"
+	"github.com/towerman1990/homey/utils"
 )
 
 var (
 	upgrader = websocket.Upgrader{}
 )
 
-type Server interface {
+type (
+	Server interface {
+		Context() context.Context
+		// get message type
+		GetMsgType() int
 
-	// get connection manager
-	GetConnectionManager() ConnectionManager
+		// get connection manager
+		ConnectionManager() ConnectionManager
 
-	// set a function it would be called on a connection openning
-	SetOnConnOpen(func(conn Connection))
+		MessageHandler() MessageHandler
 
-	// set a function it would be called on a connection closing
-	SetOnConnClose(func(conn Connection))
+		// set a function it would be called on http request arrive
+		SetOnInit(func(context.Context))
 
-	// call function on connection openning
-	CallOnConnOpen(conn Connection)
+		// set a function it would be called on a connection openning
+		SetOnConnOpen(func(conn Connection) error)
 
-	// call function on connection closing
-	CallOnConnClose(conn Connection)
+		// set a function it would be called on a connection closing
+		SetOnConnClose(func(conn Connection))
+
+		// call this function on http request arrive
+		CallOnInit(context.Context)
+
+		// call this function on connection openning
+		CallOnConnOpen(Connection) error
+
+		// call this function on connection closing
+		CallOnConnClose(Connection)
+	}
+
+	Homey struct {
+		ctx context.Context
+
+		msgType int
+
+		ConnManager ConnectionManager
+
+		MsgHandler MessageHandler
+
+		RedirectMsgChan chan *[]byte
+
+		OnInit func(context.Context)
+
+		OnConnOpen func(Connection) error
+
+		OnConnClose func(Connection)
+	}
+)
+
+func (h *Homey) Context() context.Context {
+	return h.ctx
 }
 
-type Homey struct {
-	Context context.Context
-
-	ConnectionManager
-
-	MessageHandler
-
-	ForwardMsgChan chan *[]byte
+func (h *Homey) GetMsgType() int {
+	return h.msgType
 }
 
-func (h *Homey) Stop() {
-	h.ConnectionManager.Clear()
+func (h *Homey) ConnectionManager() ConnectionManager {
+	return h.ConnManager
 }
 
-func (h *Homey) AddRouter(msgID uint32, router Router) error {
-	return h.MessageHandler.AddRouter(msgID, router)
+func (h *Homey) MessageHandler() MessageHandler {
+	return h.MsgHandler
 }
 
-func (h *Homey) GetConnectionManager() ConnectionManager {
-	return h.ConnectionManager
+func (h *Homey) SetOnInit(hookFunc func(context.Context)) {
+	h.OnInit = hookFunc
 }
 
-func (h *Homey) SetOnConnOpen(func(conn Connection)) {
-
+func (h *Homey) SetOnConnOpen(hookFunc func(Connection) error) {
+	h.OnConnOpen = hookFunc
 }
 
-func (h *Homey) SetOnConnClose(func(conn Connection)) {
-
+func (h *Homey) SetOnConnClose(hookFunc func(Connection)) {
+	h.OnConnClose = hookFunc
 }
 
-func (h *Homey) CallOnConnOpen(conn Connection) {
+func (h *Homey) CallOnInit(ctx context.Context) {
+	if h.OnConnOpen != nil {
+		h.OnInit(ctx)
+	}
+}
 
+func (h *Homey) CallOnConnOpen(conn Connection) (err error) {
+	if h.OnConnOpen != nil {
+		return h.OnConnOpen(conn)
+	}
+
+	return
 }
 
 func (h *Homey) CallOnConnClose(conn Connection) {
-
+	if h.OnConnClose != nil {
+		h.OnConnClose(conn)
+	}
 }
 
-func (h *Homey) Subscribe() {
-	rdb := service.GetRedisClient()
-	pubsub := rdb.Subscribe(h.Context, distribute.WorldChannel)
+func (h *Homey) Stop() {
+	h.ConnManager.Clear()
+}
+
+func (h *Homey) AddRouter(msgID uint32, router Router) {
+	h.MsgHandler.AddRouter(msgID, router)
+}
+
+func (h *Homey) SubscribeWorldChannel() {
+	rdb := distribute.GetRedisClient()
+	pubsub := rdb.Subscribe(h.ctx, distribute.WorldChannel)
 	defer pubsub.Close()
 
 	for msg := range pubsub.Channel() {
@@ -86,20 +135,20 @@ func (h *Homey) Subscribe() {
 			log.Logger.Error("failed to base64 decode message", zap.String("error", err.Error()))
 		}
 
-		h.ForwardMsgChan <- &data
+		h.RedirectMsgChan <- &data
 	}
 }
 
-func (h *Homey) ForwardMsgHandler() {
+func (h *Homey) RedirectMsgHandler() {
 	for {
 		select {
-		case data := <-h.ForwardMsgChan:
+		case data := <-h.RedirectMsgChan:
 			msg, err := UnPack(*data, true)
 			if err != nil {
 				log.Logger.Error("failed to unpack forward msg", zap.String("error", err.Error()))
 			}
 
-			if conn, err := h.ConnectionManager.Get(msg.GetConnID()); err == nil {
+			if conn, err := h.ConnManager.Get(msg.GetConnID()); err == nil {
 				conn.SendMsg(*data)
 			}
 		}
@@ -107,8 +156,13 @@ func (h *Homey) ForwardMsgHandler() {
 }
 
 func (h *Homey) Distribute() {
-	go h.Subscribe()
-	go h.ForwardMsgHandler()
+	if !config.Global.Distribute.Status {
+		log.Logger.Error("distribute status is false, please set the value true and configurate redis")
+		os.Exit(1)
+	}
+
+	go h.SubscribeWorldChannel()
+	go h.RedirectMsgHandler()
 }
 
 func (h *Homey) Echo() echo.HandlerFunc {
@@ -123,19 +177,20 @@ func (h *Homey) Echo() echo.HandlerFunc {
 			return err
 		}
 
-		h.MessageHandler.StartWorkPool()
-		conn := NewEchoConnection(id, h, c, ws)
+		conn := NewEchoConnection(id, h, ws)
 		defer conn.Close()
-		go conn.Open()
-		switchs := 0
-		for {
-			conn.SendMsg([]byte("hello world"))
-			time.Sleep(time.Second)
-			switchs++
-			if switchs == 3 {
-				conn.Close()
-			}
-		}
+		conn.Open()
+
 		return
+	}
+}
+
+func NewHomey(messageType int) *Homey {
+	return &Homey{
+		ctx:             context.Background(),
+		msgType:         messageType,
+		ConnManager:     NewConnectionManager(),
+		MsgHandler:      NewMessageHandler(),
+		RedirectMsgChan: make(chan *[]byte),
 	}
 }

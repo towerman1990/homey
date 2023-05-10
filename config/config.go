@@ -1,15 +1,14 @@
 package config
 
 import (
+	"log"
 	"os"
 
-	log "github.com/homey/logger"
-	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
 var (
-	GlobalConfig Global
+	Global GlobalConfig
 )
 
 type Message struct {
@@ -35,15 +34,15 @@ type Redis struct {
 	ForwardChannel string `yaml:"forward_channel"`
 }
 
-type Config struct {
+type Framework struct {
 	Env              string `yaml:"env"`
 	WorkerPoolSize   uint32 `yaml:"worker_pool_size"`
 	MaxWorkerTaskLen uint32 `yaml:"max_worker_task_len"`
 	MaxPackageSize   uint32 `yaml:"max_package_size"`
 }
 
-type Global struct {
-	Config     `yaml:"config"`
+type GlobalConfig struct {
+	Framework  `yaml:"framework"`
 	Message    `yaml:"message"`
 	TLV        `yaml:"tlv"`
 	Distribute `yaml:"distribute"`
@@ -55,19 +54,23 @@ func init() {
 }
 
 func loadConfigFile() {
-	GlobalConfig = Global{
-		Config: Config{
+	Global = GlobalConfig{
+		Framework: Framework{
 			Env:              "develop",
 			WorkerPoolSize:   0,
 			MaxWorkerTaskLen: 0,
 			MaxPackageSize:   4096},
 		Message: Message{
-			Format: "binary",
+			Format: "text",
 			Endian: "little",
 		},
 		TLV: TLV{
 			Type:   false,
 			Length: false,
+		},
+		Distribute: Distribute{
+			Status: false,
+			Way:    "redis",
 		},
 		Redis: Redis{
 			Addr:           "localhost:6379:",
@@ -78,16 +81,15 @@ func loadConfigFile() {
 		},
 	}
 
-	configFile, err := os.ReadFile("../example/conf/homey.yaml")
+	configFile, err := os.ReadFile("./conf/homey.yaml")
 	if err != nil {
-
-		log.Logger.Error("load config file failed", zap.String("error", err.Error()))
+		log.Printf("load config file failed, error: %v", err)
 		return
 	}
 
-	err = yaml.Unmarshal(configFile, &GlobalConfig)
+	err = yaml.Unmarshal(configFile, &Global)
 	if err != nil {
-		log.Logger.Error("unmarshal config data failed", zap.String("error", err.Error()))
+		log.Printf("unmarshal config data failed, error: %v", err)
 		return
 	}
 }

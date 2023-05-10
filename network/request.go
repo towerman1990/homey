@@ -1,34 +1,36 @@
 package network
 
-type Request interface {
+type (
+	Request interface {
 
-	// get request belong connection
-	GetConnection() Connection
+		// get request belong connection
+		GetConnection() Connection
 
-	// get message data type
-	GetMessageDataType() uint32
+		// get custom message type which was bound on handler
+		GetMsgDataType() uint32
 
-	// get message data
-	GetMessageData() []byte
-}
+		// get message data
+		GetMsgData() []byte
+	}
 
-type request struct {
+	request struct {
 
-	// request belong connection
-	conn Connection
+		// request belong connection
+		conn Connection
 
-	// request contains message
-	msg Message
-}
+		// request contains message
+		msg Message
+	}
+)
 
 func (r *request) GetConnection() Connection {
 	return r.conn
 }
 
-func (r *request) GetMessageData() []byte {
+func (r *request) GetMsgData() []byte {
 	return r.msg.GetData()
 }
 
-func (r *request) GetMessageDataType() uint32 {
+func (r *request) GetMsgDataType() uint32 {
 	return r.msg.GetDataType()
 }

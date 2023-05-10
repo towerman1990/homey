@@ -3,7 +3,7 @@ config:
   max_worker_task_len: 12
   max_package_size: 4096
   message:
-    format: binary
+    format: text
     endian: little
   tlv:
     type: false

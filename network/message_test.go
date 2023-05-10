@@ -4,15 +4,15 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/homey/config"
+	"github.com/towerman1990/homey/config"
 )
 
-func TestDataPack(t *testing.T) {
+func TestPackAndUnPackData(t *testing.T) {
 	// test message pack & unpack use little endian
-	t.Log(config.GlobalConfig.TLV.Type)
-	t.Log(config.GlobalConfig.TLV.Length)
-	t.Log(config.GlobalConfig.Message.Endian)
-	t.Log(config.GlobalConfig.Message.Format)
+	t.Log(config.Global.TLV.Type)
+	t.Log(config.Global.TLV.Length)
+	t.Log(config.Global.Message.Endian)
+	t.Log(config.Global.Message.Format)
 
 	const content = "Hello World!"
 	message := NewMessage(1, []byte(content))

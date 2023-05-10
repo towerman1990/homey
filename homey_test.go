@@ -7,7 +7,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
-func TestHomey(t *testing.T) {
+func TestNewHomey(t *testing.T) {
 	// Echo instance
 	e := echo.New()
 
@@ -21,5 +21,5 @@ func TestHomey(t *testing.T) {
 	e.GET("/ws", h.Echo())
 
 	// Start server
-	e.Logger.Fatal(e.Start(":1323"))
+	e.Logger.Fatal(e.Start(":8080"))
 }

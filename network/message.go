@@ -5,57 +5,60 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/homey/config"
+	"github.com/towerman1990/homey/config"
 )
 
 var endian binary.ByteOrder
 
-type Message interface {
+type (
+	Message interface {
 
-	// get send message connection id
-	GetConnID() uint64
+		// get send message connection id
+		GetConnID() uint64
 
-	// get package type
-	GetDataType() uint32
+		// get package type
+		GetDataType() uint32
 
-	// get message data
-	GetData() []byte
+		// get message data
+		GetData() []byte
 
-	// get message data length
-	GetDataLength() uint32
+		// get message data length
+		GetDataLength() uint32
 
-	// set eventually send message connection id
-	SetConnID(connID uint64)
+		// set eventually send message connection id
+		SetConnID(connID uint64)
 
-	// set package type
-	SetDataType(messageType uint32)
+		// set package type
+		SetDataType(messageType uint32)
 
-	// set message data
-	SetData(data []byte)
+		// set message data
+		SetData(data []byte)
 
-	// set message data length
-	SetDataLength(dataLength uint32)
-}
+		// set message data length
+		SetDataLength(dataLength uint32)
+	}
 
-// message structure: connID->length->type->data
-type message struct {
+	// message structure: connID->length->type->data
+	message struct {
 
-	// the ID of connection which is in charge of sending message
-	// if connID != 0 indicate it's a forward message
-	connID uint64
+		// the ID of connection which is in charge of sending message
+		// if connID != 0 indicate it's a forward message
+		connID uint64
 
-	// message type for binding router
-	DataType uint32
+		// this field is used to bind router
+		// when a request arrive, it would be handled by a router function according this value
+		DataType uint32
 
-	// message data length
-	DataLength uint32
+		// message data length
+		DataLength uint32
 
-	// message data
-	Data []byte
-}
+		// message data
+		Data []byte
+	}
+)
 
 func init() {
-	if config.GlobalConfig.Message.Endian == "little" {
+	if config.Global.Message.Endian == "little" {
 		endian = binary.LittleEndian
 	} else {
 		endian = binary.BigEndian
@@ -119,13 +122,13 @@ func Pack(message Message) (packageData []byte, err error) {
 		}
 	}
 
-	if config.GlobalConfig.TLV.Type {
+	if config.Global.TLV.Type {
 		if err := binary.Write(dataBuff, endian, message.GetDataType()); err != nil {
 			return packageData, err
 		}
 	}
 
-	if config.GlobalConfig.TLV.Length {
+	if config.Global.TLV.Length {
 		if err := binary.Write(dataBuff, endian, message.GetDataLength()); err != nil {
 			return packageData, err
 		}
@@ -150,13 +153,13 @@ func UnPack(binaryData []byte, isForward bool) (Message, error) {
 		}
 	}
 
-	if config.GlobalConfig.TLV.Type {
+	if config.Global.TLV.Type {
 		if err := binary.Read(dataBuff, endian, &message.DataType); err != nil {
 			return message, err
 		}
 	}
 
-	if config.GlobalConfig.TLV.Length {
+	if config.Global.TLV.Length {
 		if err := binary.Read(dataBuff, endian, &message.DataLength); err != nil {
 			return message, err
 		}
@@ -167,7 +170,7 @@ func UnPack(binaryData []byte, isForward bool) (Message, error) {
 		}
 	}
 
-	if config.GlobalConfig.MaxPackageSize > 0 && message.DataLength > config.GlobalConfig.MaxPackageSize {
+	if config.Global.MaxPackageSize > 0 && message.DataLength > config.Global.MaxPackageSize {
 		return message, fmt.Errorf("message data length [%d] beyond max package size limit", message.DataLength)
 	}
 

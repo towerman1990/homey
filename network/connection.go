@@ -3,87 +3,123 @@ package network
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/homey/config"
-	"github.com/homey/distribute"
-	log "github.com/homey/logger"
-	"github.com/labstack/echo/v4"
+	"github.com/towerman1990/homey/config"
+	"github.com/towerman1990/homey/distribute"
+	log "github.com/towerman1990/homey/logger"
 	"go.uber.org/zap"
 )
 
-type Connection interface {
+var (
+	// Time allowed to write a message to the peer.
+	WriteWait = 10 * time.Second
+	// Time allowed to read the next pong message from the peer.
+	PongWait = 60 * time.Second
+	// Send pings to peer with this period. Must be less than pongWait.
+	PingPeriod = (PongWait * 9) / 10
+	// Maximum message size allowed from peer.
+	MaxMessageSize int64 = 64 * 1024
+)
 
-	// get connecton ID
-	GetID() uint64
+type (
+	Connection interface {
 
-	// establish a connection between server and client
-	Open()
+		// get connecton ID
+		GetID() uint64
 
-	// close a connection
-	Close()
+		// establish a connection between server and client
+		Open()
 
-	// open connection reader
-	OpenReader()
+		// close a connection
+		Close()
 
-	// open connection writer
-	OpenWriter()
+		// reading message from websocket connection
+		StartReader()
 
-	// server send message to client by connection
-	SendMsg(data []byte) error
-}
+		// prepare for writing message into websocket connection
+		StartWriter()
 
-type connection struct {
-	ID uint64
+		// server send message to client by connection
+		SendMsg(data []byte) error
 
-	server Server
+		Context() context.Context
+	}
 
-	Conn *websocket.Conn
+	connection struct {
+		ID uint64
 
-	messageType int
+		server Server
 
-	messageHandler MessageHandler
+		Conn *websocket.Conn
 
-	sendMsgChan chan *[]byte
+		sendMsgChan chan *[]byte
 
-	exitChan chan bool
+		ctx context.Context
 
-	isClosed bool
+		cancel context.CancelFunc
 
-	context context.Context
-}
+		properties map[string]interface{}
+
+		sync.RWMutex
+
+		propertyLock sync.RWMutex
+
+		isClosed bool
+	}
+)
 
 func (c *connection) GetID() uint64 {
 	return c.ID
 }
 
 func (c *connection) Open() {
-	go c.OpenReader()
-	go c.OpenWriter()
+	c.ctx, c.cancel = context.WithCancel(context.Background())
 
-	c.server.CallOnConnOpen(c)
-	select {}
+	if err := c.server.CallOnConnOpen(c); err != nil {
+		log.Logger.Warn("connection [%d] open failed, error: %v", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
+		return
+	}
+
+	go c.StartReader()
+	go c.StartWriter()
+
+	select {
+	case <-c.ctx.Done():
+		c.finalizer()
+		return
+	}
 }
 
 func (c *connection) Close() {
-	if c.isClosed {
+	c.cancel()
+}
+
+func (c *connection) finalizer() {
+	c.server.CallOnConnClose(c)
+
+	c.Lock()
+	defer c.Unlock()
+
+	if c.isClosed == true {
 		return
+	}
+
+	log.Logger.Info("ready to close connection", zap.Uint64("connection", c.ID), zap.String("remote addr", c.Conn.RemoteAddr().String()))
+	close(c.sendMsgChan)
+	err := c.Conn.Close()
+	if err != nil {
+		log.Logger.Error("close connection [%d] failed, error: %v", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
 	}
 	c.isClosed = true
 
-	log.Logger.Info("close connection", zap.Uint64("connection", c.ID), zap.String("remote address", c.Conn.RemoteAddr().String()))
-
-	c.exitChan <- true
-
-	close(c.sendMsgChan)
-	close(c.exitChan)
-
-	c.Conn.Close()
-
-	c.server.GetConnectionManager().Remove(c)
+	c.server.ConnectionManager().Remove(c)
 }
 
-func (c *connection) OpenReader() {
+func (c *connection) StartReader() {
+	defer c.Close()
 	defer log.Logger.Info("close connection reader", zap.Uint64("id", c.ID))
 
 	for {
@@ -93,10 +129,7 @@ func (c *connection) OpenReader() {
 			return
 		}
 
-		if messageType == websocket.TextMessage && config.GlobalConfig.Message.Format != "text" {
-			log.Logger.Error("invalid message type", zap.Uint64("connection", c.ID), zap.String("error", "unsupport text message type"))
-			return
-		}
+		log.Logger.Info("received message", zap.Int("message type", messageType))
 
 		msg, err := UnPack(binaryMessage, false)
 		if err != nil {
@@ -109,25 +142,33 @@ func (c *connection) OpenReader() {
 			msg:  msg,
 		}
 
-		if config.GlobalConfig.WorkerPoolSize > 0 {
-			c.messageHandler.SendMsgToTaskQueue(req)
+		if config.Global.WorkerPoolSize > 0 {
+			c.server.MessageHandler().SendMsgToTaskQueue(req)
 		} else {
-			go c.messageHandler.ExecHandler(req)
+			go c.server.MessageHandler().ExecHandler(req)
 		}
 	}
 }
 
-func (c *connection) OpenWriter() {
+func (c *connection) StartWriter() {
 	defer log.Logger.Info("close connection writer", zap.Uint64("id", c.ID))
+	ticker := time.NewTicker(PingPeriod)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case data := <-c.sendMsgChan:
-			if err := c.Conn.WriteMessage(c.messageType, *data); err != nil {
+			if err := c.Conn.WriteMessage(c.server.GetMsgType(), *data); err != nil {
 				log.Logger.Error("failed to write message", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
+				c.Close()
 				return
 			}
-		case <-c.exitChan:
+		case <-ticker.C:
+			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Logger.Error("failed to ping client", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
+				return
+			}
+		case <-c.ctx.Done():
 			return
 		}
 	}
@@ -139,7 +180,6 @@ func (c *connection) SendMsg(data []byte) (err error) {
 	}
 
 	c.sendMsgChan <- &data
-
 	return
 }
 
@@ -148,8 +188,7 @@ func (c *connection) SendForwardMsg(data []byte) (err error) {
 		return fmt.Errorf("connection [%d] has closed", c.ID)
 	}
 
-	err = distribute.PublishForwardMsg(c.context, data)
-
+	err = distribute.PublishForwardMsg(c.ctx, data)
 	return
 }
 
@@ -157,26 +196,33 @@ func (c *connection) GetStatus() bool {
 	return c.isClosed
 }
 
-func NewEchoConnection(id uint64, server Server, context echo.Context, conn *websocket.Conn) Connection {
-	messageType := websocket.TextMessage
-	if config.GlobalConfig.Message.Format == "binary" {
-		messageType = websocket.BinaryMessage
-	}
-	log.Logger.Info(config.GlobalConfig.Message.Format)
-	log.Logger.Info(config.GlobalConfig.Message.Endian)
-	echoConn := &connection{
-		ID:             id,
-		server:         server,
-		Conn:           conn,
-		messageType:    messageType,
-		messageHandler: NewMessageHandler(),
-		sendMsgChan:    make(chan *[]byte),
-		exitChan:       make(chan bool),
-		isClosed:       false,
-		context:        context.Request().Context(),
-	}
+func (c *connection) Context() context.Context {
+	return c.ctx
+}
 
-	echoConn.server.GetConnectionManager().Add(echoConn)
+func (c *connection) SetProperty(key string, value interface{}) {
+	c.propertyLock.RLock()
+	defer c.propertyLock.RUnlock()
+
+	c.properties[key] = value
+}
+
+func (c *connection) GetProperty(key string) (value interface{}, ok bool) {
+	c.propertyLock.RLock()
+	defer c.propertyLock.RUnlock()
+
+	value, ok = c.properties[key]
+	return
+}
+
+func NewEchoConnection(id uint64, server Server, conn *websocket.Conn) Connection {
+	echoConn := &connection{
+		ID:          id,
+		server:      server,
+		Conn:        conn,
+		sendMsgChan: make(chan *[]byte),
+	}
+	echoConn.server.ConnectionManager().Add(echoConn)
 
 	return echoConn
 }
