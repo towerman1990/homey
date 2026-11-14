@@ -3,49 +3,43 @@ package distribute
 import (
 	"context"
 	"encoding/base64"
-	"os"
-
-	log "github.com/towerman1990/homey/logger"
+	"sync"
 
 	"github.com/go-redis/redis/v9"
 	"github.com/towerman1990/homey/config"
-	"go.uber.org/zap"
 )
 
 var (
-	redisClient    *redis.Client
-	WorldChannel   string
-	ForwardChannel string
+	defaultClientOnce sync.Once
+	defaultClient     *redis.Client
+	WorldChannel      = config.Global.Redis.WorldChannel
+	ForwardChannel    = config.Global.Redis.ForwardChannel
 )
 
-func init() {
-	WorldChannel = config.Global.Redis.WorldChannel
-	ForwardChannel = config.Global.Redis.ForwardChannel
-
-	redisClient = redis.NewClient(&redis.Options{
-		Addr:     config.Global.Redis.Addr,
-		Password: config.Global.Redis.Password,
-		DB:       config.Global.Redis.DB,
+func NewClient(cfg config.Redis) *redis.Client {
+	return redis.NewClient(&redis.Options{
+		Addr:                  cfg.Addr,
+		Password:              cfg.Password,
+		DB:                    cfg.DB,
+		ContextTimeoutEnabled: true,
 	})
-
-	if config.Global.Distribute.Status {
-		if statusCmd := redisClient.Ping(context.Background()); statusCmd.Err() != nil {
-			log.Logger.Error("failed to ping redis server", zap.String("error", statusCmd.Err().Error()))
-			os.Exit(1)
-		}
-	}
 }
 
 func GetRedisClient() *redis.Client {
-	return redisClient
+	defaultClientOnce.Do(func() {
+		defaultClient = NewClient(config.Global.Redis)
+	})
+	return defaultClient
 }
 
-func PublishWorldMsg(ctx context.Context, data []byte) (err error) {
-	_, err = redisClient.Publish(ctx, WorldChannel, base64.StdEncoding.EncodeToString(data)).Result()
-	return
+func Publish(ctx context.Context, client *redis.Client, channel string, data []byte) error {
+	return client.Publish(ctx, channel, base64.StdEncoding.EncodeToString(data)).Err()
 }
 
-func PublishForwardMsg(ctx context.Context, data []byte) (err error) {
-	_, err = redisClient.Publish(ctx, ForwardChannel, base64.StdEncoding.EncodeToString(data)).Result()
-	return
+func PublishWorldMsg(ctx context.Context, data []byte) error {
+	return Publish(ctx, GetRedisClient(), WorldChannel, data)
+}
+
+func PublishForwardMsg(ctx context.Context, data []byte) error {
+	return Publish(ctx, GetRedisClient(), ForwardChannel, data)
 }

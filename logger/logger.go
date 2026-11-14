@@ -37,10 +37,11 @@ func getWriteSync() zapcore.WriteSyncer {
 	file, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_RDWR, os.ModePerm)
 	if err != nil {
 		log.Printf("open log file [%s] failed, error: %v", filename, err)
+		return zapcore.Lock(zapcore.AddSync(os.Stderr))
 	}
 
 	syncFile := zapcore.AddSync(file)
 	syncConsole := zapcore.AddSync(os.Stderr)
 
-	return zapcore.NewMultiWriteSyncer(syncConsole, syncFile)
+	return zapcore.Lock(zapcore.NewMultiWriteSyncer(syncConsole, syncFile))
 }

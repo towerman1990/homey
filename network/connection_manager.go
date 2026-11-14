@@ -36,24 +36,37 @@ type (
 )
 
 func (cm *connectionManager) Add(conn Connection) {
+	id := conn.GetID()
 	cm.lock.Lock()
-	defer cm.lock.Unlock()
-
-	cm.connections[conn.GetID()] = conn
-	log.Logger.Info("connection was added into connection manager successfully", zap.Uint64("connection", conn.GetID()))
+	cm.connections[id] = conn
+	cm.lock.Unlock()
+	log.Logger.Info("connection was added into connection manager successfully", zap.Uint64("connection", id))
 }
 
 func (cm *connectionManager) Remove(conn Connection) {
-	cm.lock.Lock()
-	defer cm.lock.Unlock()
+	if client, ok := conn.(*connection); ok {
+		cm.unregister(client)
+	} else {
+		id := conn.GetID()
+		cm.lock.Lock()
+		delete(cm.connections, id)
+		cm.lock.Unlock()
+	}
 	conn.Close()
-	delete(cm.connections, conn.GetID())
+}
+
+func (cm *connectionManager) unregister(conn *connection) {
+	cm.lock.Lock()
+	if cm.connections[conn.ID] == conn {
+		delete(cm.connections, conn.ID)
+	}
+	cm.lock.Unlock()
 }
 
 func (cm *connectionManager) Get(connID uint64) (conn Connection, err error) {
 	cm.lock.RLock()
 	defer cm.lock.RUnlock()
-	if conn, ok := cm.connections[conn.GetID()]; ok {
+	if conn, ok := cm.connections[connID]; ok {
 		return conn, err
 	}
 
@@ -61,15 +74,18 @@ func (cm *connectionManager) Get(connID uint64) (conn Connection, err error) {
 }
 
 func (cm *connectionManager) Count() int {
+	cm.lock.RLock()
+	defer cm.lock.RUnlock()
 	return len(cm.connections)
 }
 
 func (cm *connectionManager) Clear() {
 	cm.lock.Lock()
-	defer cm.lock.Unlock()
-
-	for _, conn := range cm.connections {
-		cm.Remove(conn)
+	connections := cm.connections
+	cm.connections = make(map[uint64]Connection)
+	cm.lock.Unlock()
+	for _, conn := range connections {
+		conn.Close()
 	}
 }
 

@@ -1,6 +1,9 @@
 package config
 
 import (
+	"bytes"
+	"fmt"
+	"io"
 	"log"
 	"os"
 
@@ -22,8 +25,9 @@ type TLV struct {
 }
 
 type Distribute struct {
-	Status bool   `yaml:"status"`
-	Way    string `yaml:"way"`
+	Status    bool   `yaml:"status"`
+	Way       string `yaml:"way"`
+	MachineID uint16 `yaml:"machine_id"`
 }
 
 type Redis struct {
@@ -53,8 +57,8 @@ func init() {
 	loadConfigFile()
 }
 
-func loadConfigFile() {
-	Global = GlobalConfig{
+func Default() GlobalConfig {
+	return GlobalConfig{
 		Framework: Framework{
 			Env:              "develop",
 			WorkerPoolSize:   0,
@@ -73,23 +77,59 @@ func loadConfigFile() {
 			Way:    "redis",
 		},
 		Redis: Redis{
-			Addr:           "localhost:6379:",
+			Addr:           "localhost:6379",
 			Password:       "",
 			DB:             0,
 			WorldChannel:   "world_channel",
 			ForwardChannel: "forward_channel",
 		},
 	}
+}
 
-	configFile, err := os.ReadFile("./conf/homey.yaml")
-	if err != nil {
-		log.Printf("load config file failed, error: %v", err)
-		return
+func loadConfigFile() {
+	Global = Default()
+	cfg, err := LoadFile("./conf/homey.yaml")
+	if err == nil {
+		Global = cfg
+	} else if !os.IsNotExist(err) {
+		log.Printf("load homey config: %v", err)
 	}
+}
 
-	err = yaml.Unmarshal(configFile, &Global)
+func LoadFile(path string) (GlobalConfig, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		log.Printf("unmarshal config data failed, error: %v", err)
-		return
+		return GlobalConfig{}, err
 	}
+	cfg := Default()
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&cfg); err != nil {
+		return GlobalConfig{}, fmt.Errorf("decode %s: %w", path, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return GlobalConfig{}, fmt.Errorf("%s must contain one YAML document", path)
+	}
+	return cfg, cfg.Validate()
+}
+
+func (cfg GlobalConfig) Validate() error {
+	if cfg.Message.Format != "text" && cfg.Message.Format != "binary" {
+		return fmt.Errorf("invalid message format %q", cfg.Message.Format)
+	}
+	if cfg.Message.Endian != "little" && cfg.Message.Endian != "big" {
+		return fmt.Errorf("invalid message byte order %q", cfg.Message.Endian)
+	}
+	if cfg.Message.Format == "text" && (cfg.TLV.Type || cfg.TLV.Length) {
+		return fmt.Errorf("binary message headers require binary mode")
+	}
+	if cfg.Distribute.Status && (cfg.Distribute.Way != "redis" || cfg.Redis.Addr == "" ||
+		cfg.Redis.WorldChannel == "" || cfg.Redis.ForwardChannel == "") {
+		return fmt.Errorf("distribution requires a Redis address and channel names")
+	}
+	if cfg.Distribute.Status && cfg.Distribute.MachineID == 0 {
+		return fmt.Errorf("distribution requires a nonzero machine_id")
+	}
+	return nil
 }

@@ -8,7 +8,18 @@ import (
 	"github.com/towerman1990/homey/config"
 )
 
-var endian binary.ByteOrder
+type messageCodec struct {
+	order    binary.ByteOrder
+	settings config.GlobalConfig
+}
+
+func newMessageCodec(cfg config.GlobalConfig) messageCodec {
+	var order binary.ByteOrder = binary.BigEndian
+	if cfg.Message.Endian == "little" {
+		order = binary.LittleEndian
+	}
+	return messageCodec{order: order, settings: cfg}
+}
 
 type (
 	Message interface {
@@ -38,7 +49,7 @@ type (
 		SetDataLength(dataLength uint32)
 	}
 
-	// message structure: connID->length->type->data
+	// message structure: connID->type->length->data
 	message struct {
 
 		// the ID of connection which is in charge of sending message
@@ -56,14 +67,6 @@ type (
 		Data []byte
 	}
 )
-
-func init() {
-	if config.Global.Message.Endian == "little" {
-		endian = binary.LittleEndian
-	} else {
-		endian = binary.BigEndian
-	}
-}
 
 func (m *message) GetConnID() uint64 {
 	return m.connID
@@ -113,28 +116,35 @@ func NewMessage(packageType uint32, data []byte) Message {
 	}
 }
 
-func Pack(message Message) (packageData []byte, err error) {
+func Pack(message Message) ([]byte, error) {
+	return newMessageCodec(config.Global).pack(message)
+}
+
+func (c messageCodec) pack(message Message) (packageData []byte, err error) {
+	if c.settings.TLV.Length && uint64(message.GetDataLength()) != uint64(len(message.GetData())) {
+		return nil, fmt.Errorf("declared payload length does not match data")
+	}
 	dataBuff := bytes.NewBuffer([]byte{})
 
 	if message.GetConnID() > 0 {
-		if err := binary.Write(dataBuff, endian, message.GetConnID()); err != nil {
+		if err := binary.Write(dataBuff, c.order, message.GetConnID()); err != nil {
 			return packageData, err
 		}
 	}
 
-	if config.Global.TLV.Type {
-		if err := binary.Write(dataBuff, endian, message.GetDataType()); err != nil {
+	if c.settings.TLV.Type {
+		if err := binary.Write(dataBuff, c.order, message.GetDataType()); err != nil {
 			return packageData, err
 		}
 	}
 
-	if config.Global.TLV.Length {
-		if err := binary.Write(dataBuff, endian, message.GetDataLength()); err != nil {
+	if c.settings.TLV.Length {
+		if err := binary.Write(dataBuff, c.order, message.GetDataLength()); err != nil {
 			return packageData, err
 		}
 	}
 
-	if err := binary.Write(dataBuff, endian, message.GetData()); err != nil {
+	if err := binary.Write(dataBuff, c.order, message.GetData()); err != nil {
 		return packageData, err
 	}
 
@@ -144,40 +154,40 @@ func Pack(message Message) (packageData []byte, err error) {
 }
 
 func UnPack(binaryData []byte, isForward bool) (Message, error) {
+	return newMessageCodec(config.Global).unpack(binaryData, isForward)
+}
+
+func (c messageCodec) unpack(binaryData []byte, isForward bool) (Message, error) {
 	message := &message{}
 	dataBuff := bytes.NewBuffer(binaryData)
 
 	if isForward {
-		if err := binary.Read(dataBuff, endian, &message.connID); err != nil {
+		if err := binary.Read(dataBuff, c.order, &message.connID); err != nil {
 			return message, err
 		}
 	}
 
-	if config.Global.TLV.Type {
-		if err := binary.Read(dataBuff, endian, &message.DataType); err != nil {
+	if c.settings.TLV.Type {
+		if err := binary.Read(dataBuff, c.order, &message.DataType); err != nil {
 			return message, err
 		}
 	}
 
-	if config.Global.TLV.Length {
-		if err := binary.Read(dataBuff, endian, &message.DataLength); err != nil {
+	if c.settings.TLV.Length {
+		if err := binary.Read(dataBuff, c.order, &message.DataLength); err != nil {
 			return message, err
 		}
-	} else {
-		message.DataLength = uint32(len(binaryData))
-		if message.connID != 0 {
-			message.DataLength -= 8
+		if uint64(message.DataLength) != uint64(dataBuff.Len()) {
+			return message, fmt.Errorf("declared payload length does not match data")
 		}
 	}
 
-	if config.Global.MaxPackageSize > 0 && message.DataLength > config.Global.MaxPackageSize {
-		return message, fmt.Errorf("message data length [%d] beyond max package size limit", message.DataLength)
+	if uint64(dataBuff.Len()) > uint64(^uint32(0)) ||
+		(c.settings.MaxPackageSize > 0 && uint64(dataBuff.Len()) > uint64(c.settings.MaxPackageSize)) {
+		return message, fmt.Errorf("message data length [%d] beyond max package size limit", dataBuff.Len())
 	}
-
-	message.Data = make([]byte, message.DataLength)
-	if err := binary.Read(dataBuff, endian, &message.Data); err != nil {
-		return message, err
-	}
+	message.DataLength = uint32(dataBuff.Len())
+	message.Data = append([]byte(nil), dataBuff.Bytes()...)
 
 	return message, nil
 }

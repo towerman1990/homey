@@ -2,7 +2,7 @@ package network
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"sync"
 	"time"
 
@@ -14,158 +14,149 @@ import (
 )
 
 var (
-	// Time allowed to write a message to the peer.
-	WriteWait = 10 * time.Second
-	// Time allowed to read the next pong message from the peer.
-	PongWait = 60 * time.Second
-	// Send pings to peer with this period. Must be less than pongWait.
-	PingPeriod = (PongWait * 9) / 10
-	// Maximum message size allowed from peer.
+	ErrConnectionClosed = errors.New("homey: connection closed")
+	ErrSendQueueFull    = errors.New("homey: send queue full")
+
+	WriteWait            = 10 * time.Second
+	PongWait             = 60 * time.Second
+	PingPeriod           = (PongWait * 9) / 10
 	MaxMessageSize int64 = 64 * 1024
 )
 
-type (
-	Connection interface {
+type Connection interface {
+	GetID() uint64
+	Open()
+	Close()
+	StartReader()
+	StartWriter()
+	SendMsg(data []byte) error
+	Context() context.Context
+}
 
-		// get connecton ID
-		GetID() uint64
-
-		// establish a connection between server and client
-		Open()
-
-		// close a connection
-		Close()
-
-		// reading message from websocket connection
-		StartReader()
-
-		// prepare for writing message into websocket connection
-		StartWriter()
-
-		// server send message to client by connection
-		SendMsg(data []byte) error
-
-		Context() context.Context
-	}
-
-	connection struct {
-		ID uint64
-
-		server Server
-
-		Conn *websocket.Conn
-
-		sendMsgChan chan *[]byte
-
-		ctx context.Context
-
-		cancel context.CancelFunc
-
-		properties map[string]interface{}
-
-		sync.RWMutex
-
-		propertyLock sync.RWMutex
-
-		isClosed bool
-	}
-)
+type connection struct {
+	ID           uint64
+	server       Server
+	Conn         *websocket.Conn
+	sendMsgChan  chan []byte
+	ctx          context.Context
+	cancel       context.CancelFunc
+	settings     config.GlobalConfig
+	openOnce     sync.Once
+	closeOnce    sync.Once
+	readerOnce   sync.Once
+	writerOnce   sync.Once
+	propertyLock sync.RWMutex
+	properties   map[string]interface{}
+}
 
 func (c *connection) GetID() uint64 {
 	return c.ID
 }
 
 func (c *connection) Open() {
-	c.ctx, c.cancel = context.WithCancel(context.Background())
+	c.openOnce.Do(c.run)
+}
 
+func (c *connection) run() {
+	defer c.Close()
+	if c.ctx.Err() != nil {
+		return
+	}
 	if err := c.server.CallOnConnOpen(c); err != nil {
-		log.Logger.Warn("connection [%d] open failed, error: %v", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
+		log.Logger.Warn("connection open hook rejected connection", zap.Uint64("connection", c.ID), zap.Error(err))
 		return
 	}
 
-	go c.StartReader()
+	defer func() {
+		c.Close()
+		c.server.CallOnConnClose(c)
+	}()
 	go c.StartWriter()
-
-	select {
-	case <-c.ctx.Done():
-		c.finalizer()
-		return
-	}
+	c.StartReader()
 }
 
 func (c *connection) Close() {
-	c.cancel()
-}
-
-func (c *connection) finalizer() {
-	c.server.CallOnConnClose(c)
-
-	c.Lock()
-	defer c.Unlock()
-
-	if c.isClosed == true {
-		return
+	closed := false
+	c.closeOnce.Do(func() {
+		closed = true
+		c.cancel()
+		_ = c.Conn.Close()
+		if manager, ok := c.server.ConnectionManager().(*connectionManager); ok {
+			manager.unregister(c)
+			closed = false
+		}
+	})
+	if closed {
+		c.server.ConnectionManager().Remove(c)
 	}
-
-	log.Logger.Info("ready to close connection", zap.Uint64("connection", c.ID), zap.String("remote addr", c.Conn.RemoteAddr().String()))
-	close(c.sendMsgChan)
-	err := c.Conn.Close()
-	if err != nil {
-		log.Logger.Error("close connection [%d] failed, error: %v", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
-	}
-	c.isClosed = true
-
-	c.server.ConnectionManager().Remove(c)
 }
 
 func (c *connection) StartReader() {
-	defer c.Close()
-	defer log.Logger.Info("close connection reader", zap.Uint64("id", c.ID))
+	c.readerOnce.Do(c.readLoop)
+}
 
-	for {
-		messageType, binaryMessage, err := c.Conn.ReadMessage()
+func (c *connection) readLoop() {
+	defer c.Close()
+	readLimit := MaxMessageSize
+	if c.settings.MaxPackageSize > 0 {
+		packetLimit := int64(c.settings.MaxPackageSize)
+		if c.settings.TLV.Type {
+			packetLimit += 4
+		}
+		if c.settings.TLV.Length {
+			packetLimit += 4
+		}
+		if readLimit <= 0 || packetLimit < readLimit {
+			readLimit = packetLimit
+		}
+	}
+	c.Conn.SetReadLimit(readLimit)
+	if err := c.Conn.SetReadDeadline(time.Now().Add(PongWait)); err != nil {
+		return
+	}
+	c.Conn.SetPongHandler(func(string) error {
+		return c.Conn.SetReadDeadline(time.Now().Add(PongWait))
+	})
+
+	codec := newMessageCodec(c.settings)
+	for c.ctx.Err() == nil {
+		messageType, data, err := c.Conn.ReadMessage()
 		if err != nil {
-			log.Logger.Error("failed to read message", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
 			return
 		}
-
-		log.Logger.Info("received message", zap.Int("message type", messageType))
-
-		msg, err := UnPack(binaryMessage, false)
+		if messageType != c.server.GetMsgType() {
+			return
+		}
+		msg, err := codec.unpack(data, false)
 		if err != nil {
-			log.Logger.Error("failed to unpack message", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
-			break
+			log.Logger.Warn("failed to unpack message", zap.Uint64("connection", c.ID), zap.Error(err))
+			return
 		}
-
-		req := &request{
-			conn: c,
-			msg:  msg,
-		}
-
-		if config.Global.WorkerPoolSize > 0 {
-			c.server.MessageHandler().SendMsgToTaskQueue(req)
-		} else {
-			go c.server.MessageHandler().ExecHandler(req)
-		}
+		req := &request{conn: c, msg: msg}
+		c.server.MessageHandler().SendMsgToTaskQueue(req)
 	}
 }
 
 func (c *connection) StartWriter() {
-	defer log.Logger.Info("close connection writer", zap.Uint64("id", c.ID))
+	c.writerOnce.Do(c.writeLoop)
+}
+
+func (c *connection) writeLoop() {
+	defer c.Close()
 	ticker := time.NewTicker(PingPeriod)
 	defer ticker.Stop()
 
-	for {
+	for c.ctx.Err() == nil {
 		select {
 		case data := <-c.sendMsgChan:
-			if err := c.Conn.WriteMessage(c.server.GetMsgType(), *data); err != nil {
-				log.Logger.Error("failed to write message", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
-				c.Close()
+			if err := c.Conn.SetWriteDeadline(time.Now().Add(WriteWait)); err != nil {
+				return
+			}
+			if err := c.Conn.WriteMessage(c.server.GetMsgType(), data); err != nil {
 				return
 			}
 		case <-ticker.C:
-			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				log.Logger.Error("failed to ping client", zap.Uint64("connection", c.ID), zap.String("error", err.Error()))
+			if err := c.Conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(WriteWait)); err != nil {
 				return
 			}
 		case <-c.ctx.Done():
@@ -174,26 +165,33 @@ func (c *connection) StartWriter() {
 	}
 }
 
-func (c *connection) SendMsg(data []byte) (err error) {
-	if c.isClosed {
-		return fmt.Errorf("connection [%d] has closed", c.ID)
+// SendMsg queues a copy of data for the writer.
+func (c *connection) SendMsg(data []byte) error {
+	if c.ctx.Err() != nil {
+		return ErrConnectionClosed
 	}
-
-	c.sendMsgChan <- &data
-	return
+	select {
+	case <-c.ctx.Done():
+		return ErrConnectionClosed
+	case c.sendMsgChan <- append([]byte(nil), data...):
+		return nil
+	default:
+		return ErrSendQueueFull
+	}
 }
 
-func (c *connection) SendForwardMsg(data []byte) (err error) {
-	if c.isClosed {
-		return fmt.Errorf("connection [%d] has closed", c.ID)
+func (c *connection) SendForwardMsg(data []byte) error {
+	if c.ctx.Err() != nil {
+		return ErrConnectionClosed
 	}
-
-	err = distribute.PublishForwardMsg(c.ctx, data)
-	return
+	if h, ok := c.server.(*Homey); ok {
+		return h.publishForward(c.ctx, data)
+	}
+	return distribute.PublishForwardMsg(c.ctx, data)
 }
 
 func (c *connection) GetStatus() bool {
-	return c.isClosed
+	return c.ctx.Err() != nil
 }
 
 func (c *connection) Context() context.Context {
@@ -201,28 +199,37 @@ func (c *connection) Context() context.Context {
 }
 
 func (c *connection) SetProperty(key string, value interface{}) {
-	c.propertyLock.RLock()
-	defer c.propertyLock.RUnlock()
-
+	c.propertyLock.Lock()
+	defer c.propertyLock.Unlock()
 	c.properties[key] = value
 }
 
-func (c *connection) GetProperty(key string) (value interface{}, ok bool) {
+func (c *connection) GetProperty(key string) (interface{}, bool) {
 	c.propertyLock.RLock()
 	defer c.propertyLock.RUnlock()
-
-	value, ok = c.properties[key]
-	return
+	value, ok := c.properties[key]
+	return value, ok
 }
 
 func NewEchoConnection(id uint64, server Server, conn *websocket.Conn) Connection {
-	echoConn := &connection{
+	settings := config.Global
+	if h, ok := server.(*Homey); ok {
+		settings = h.settings
+	}
+	ctx, cancel := context.WithCancel(server.Context())
+	client := &connection{
 		ID:          id,
 		server:      server,
 		Conn:        conn,
-		sendMsgChan: make(chan *[]byte),
+		sendMsgChan: make(chan []byte, 64),
+		ctx:         ctx,
+		cancel:      cancel,
+		settings:    settings,
+		properties:  make(map[string]interface{}),
 	}
-	echoConn.server.ConnectionManager().Add(echoConn)
-
-	return echoConn
+	server.ConnectionManager().Add(client)
+	if ctx.Err() != nil {
+		client.Close()
+	}
+	return client
 }

@@ -6,14 +6,21 @@ import (
 	"github.com/towerman1990/homey/network"
 )
 
-func New() (homey *network.Homey) {
+func New() *network.Homey {
+	return newServer(config.Global)
+}
+
+func NewWithConfig(cfg config.GlobalConfig) (*network.Homey, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return newServer(cfg), nil
+}
+
+func newServer(cfg config.GlobalConfig) *network.Homey {
 	messageType := websocket.BinaryMessage
-	if config.Global.Message.Format == "text" {
+	if cfg.Message.Format == "text" {
 		messageType = websocket.TextMessage
 	}
-
-	homey = network.NewHomey(messageType)
-	homey.MsgHandler.StartWorkPool()
-
-	return
+	return network.NewHomeyWithConfig(messageType, cfg)
 }

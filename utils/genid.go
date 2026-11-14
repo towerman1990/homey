@@ -1,9 +1,11 @@
 package utils
 
 import (
+	"errors"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sony/sonyflake"
@@ -42,26 +44,26 @@ func getMachineID() (machineID uint16, err error) {
 	return
 }
 
-func saddMachineIDToRedisSet() (result int, err error) {
-	return
+var generatorOnce sync.Once
+var generator *sonyflake.Sonyflake
+
+// NewIDGenerator creates a generator for a deployment-assigned machine ID.
+func NewIDGenerator(machineID uint16) *sonyflake.Sonyflake {
+	return sonyflake.NewSonyflake(sonyflake.Settings{
+		StartTime: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
+		MachineID: func() (uint16, error) { return machineID, nil },
+	})
 }
 
-func checkMachineID(machineID uint16) bool {
-	saddResult, err := saddMachineIDToRedisSet()
-	if err != nil || saddResult == 0 {
-		return true
+func GenID() (uint64, error) {
+	generatorOnce.Do(func() {
+		generator = sonyflake.NewSonyflake(sonyflake.Settings{
+			StartTime: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
+			MachineID: getMachineID,
+		})
+	})
+	if generator == nil {
+		return 0, errors.New("homey: initialize Sonyflake generator")
 	}
-
-	return false
-}
-func GenID() (uid uint64, err error) {
-	t, _ := time.Parse("2006-01-02", "2023-01-01")
-	settings := sonyflake.Settings{
-		StartTime:      t,
-		MachineID:      getMachineID,
-		CheckMachineID: checkMachineID,
-	}
-
-	sf := sonyflake.NewSonyflake(settings)
-	return sf.NextID()
+	return generator.NextID()
 }
