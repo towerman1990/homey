@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package homey.forward.v1;
+
+option go_package = "github.com/towerman1990/homey/rpcforward/v1;forwardv1";
+
+service Forwarder {
+  rpc Deliver(DeliverRequest) returns (DeliverResponse);
+}
+
+message DeliverRequest {
+  uint64 connection_id = 1;
+  bytes payload = 2;
+  string node_id = 3;
+}
+
+enum DeliveryResult {
+  DELIVERY_RESULT_UNSPECIFIED = 0;
+  DELIVERY_RESULT_QUEUED = 1;
+  DELIVERY_RESULT_CONNECTION_NOT_FOUND = 2;
+  DELIVERY_RESULT_QUEUE_FULL = 3;
+}
+
+message DeliverResponse {
+  DeliveryResult result = 1;
+}

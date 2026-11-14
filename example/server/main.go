@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
+	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 	"github.com/towerman1990/homey"
 	"github.com/towerman1990/homey/config"
 	"github.com/towerman1990/homey/network"
@@ -32,7 +32,7 @@ func main() {
 	e := echo.New()
 
 	// Middleware
-	e.Use(middleware.Logger())
+	e.Use(middleware.RequestLogger())
 	e.Use(middleware.Recover())
 
 	cfg, err := config.LoadFile("conf/homey.yaml")
@@ -57,22 +57,27 @@ func main() {
 
 	// Routes
 	e.Static("/", "./public")
-	e.GET("/ws", h.Echo())
+	e.GET("/ws", func(c *echo.Context) error {
+		h.ServeHTTP(c.Response(), c.Request())
+		return nil
+	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	server := &http.Server{Addr: ":8080", Handler: e, ReadHeaderTimeout: 5 * time.Second}
 	serverErr := make(chan error, 1)
-	go func() { serverErr <- e.StartServer(server) }()
+	go func() { serverErr <- server.ListenAndServe() }()
 	select {
 	case err := <-serverErr:
 		if !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("start HTTP server: %v", err)
 		}
 	case <-ctx.Done():
-		h.Stop()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		if err := h.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shut down Homey: %v", err)
+		}
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			log.Printf("shut down HTTP server: %v", err)
 		}

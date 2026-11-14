@@ -37,6 +37,7 @@ type (
 		ctx            context.Context
 		routesMu       sync.RWMutex
 		startOnce      sync.Once
+		startTask      func(func())
 	}
 )
 
@@ -87,7 +88,12 @@ func (mh *messageHandler) StartWorkPool() {
 	mh.startOnce.Do(func() {
 		for i := range mh.TaskQueue {
 			mh.TaskQueue[i] = make(chan Request, mh.queueCapacity)
-			go mh.startWorker(mh.TaskQueue[i])
+			queue := mh.TaskQueue[i]
+			if mh.startTask != nil {
+				mh.startTask(func() { mh.startWorker(queue) })
+			} else {
+				go mh.startWorker(queue)
+			}
 		}
 	})
 }

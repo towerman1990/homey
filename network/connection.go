@@ -38,6 +38,7 @@ type connection struct {
 	server       Server
 	Conn         *websocket.Conn
 	sendMsgChan  chan []byte
+	requests     chan Request
 	ctx          context.Context
 	cancel       context.CancelFunc
 	settings     config.GlobalConfig
@@ -67,12 +68,36 @@ func (c *connection) run() {
 		return
 	}
 
+	var tasks sync.WaitGroup
 	defer func() {
 		c.Close()
+		tasks.Wait()
 		c.server.CallOnConnClose(c)
 	}()
-	go c.StartWriter()
+	tasks.Add(2)
+	go func() {
+		defer tasks.Done()
+		c.StartWriter()
+	}()
+	go func() {
+		defer tasks.Done()
+		c.dispatchRequests()
+	}()
 	c.StartReader()
+}
+
+func (c *connection) dispatchRequests() {
+	handler := c.server.MessageHandler()
+	for c.ctx.Err() == nil {
+		select {
+		case <-c.ctx.Done():
+			return
+		case req := <-c.requests:
+			if c.ctx.Err() == nil {
+				handler.SendMsgToTaskQueue(req)
+			}
+		}
+	}
 }
 
 func (c *connection) Close() {
@@ -80,6 +105,10 @@ func (c *connection) Close() {
 	c.closeOnce.Do(func() {
 		closed = true
 		c.cancel()
+		if c.server.Context().Err() != nil {
+			payload := websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down")
+			_ = c.Conn.WriteControl(websocket.CloseMessage, payload, time.Now().Add(100*time.Millisecond))
+		}
 		_ = c.Conn.Close()
 		if manager, ok := c.server.ConnectionManager().(*connectionManager); ok {
 			manager.unregister(c)
@@ -133,7 +162,12 @@ func (c *connection) readLoop() {
 			return
 		}
 		req := &request{conn: c, msg: msg}
-		c.server.MessageHandler().SendMsgToTaskQueue(req)
+		select {
+		case c.requests <- req:
+		default:
+			log.Logger.Warn("connection request queue full", zap.Uint64("connection", c.ID))
+			return
+		}
 	}
 }
 
@@ -185,7 +219,7 @@ func (c *connection) SendForwardMsg(data []byte) error {
 		return ErrConnectionClosed
 	}
 	if h, ok := c.server.(*Homey); ok {
-		return h.publishForward(c.ctx, data)
+		return h.PublishForwardMsg(c.ctx, data)
 	}
 	return distribute.PublishForwardMsg(c.ctx, data)
 }
@@ -222,6 +256,7 @@ func NewEchoConnection(id uint64, server Server, conn *websocket.Conn) Connectio
 		server:      server,
 		Conn:        conn,
 		sendMsgChan: make(chan []byte, 64),
+		requests:    make(chan Request, 64),
 		ctx:         ctx,
 		cancel:      cancel,
 		settings:    settings,

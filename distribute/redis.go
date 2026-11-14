@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"sync"
 
-	"github.com/go-redis/redis/v9"
+	"github.com/redis/go-redis/v9"
 	"github.com/towerman1990/homey/config"
 )
 

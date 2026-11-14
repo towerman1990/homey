@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-redis/redis/v9"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/towerman1990/homey/config"
 	log "github.com/towerman1990/homey/logger"
@@ -64,6 +64,12 @@ type (
 		idGenerator *sonyflake.Sonyflake
 		redisMu     sync.Mutex
 		redisClient *redis.Client
+		lifecycleMu sync.Mutex
+		stopping    bool
+		active      sync.WaitGroup
+		stopOnce    sync.Once
+		stopped     chan struct{}
+		done        chan struct{}
 
 		msgType int
 
@@ -130,14 +136,59 @@ func (h *Homey) CallOnConnClose(conn Connection) {
 }
 
 func (h *Homey) Stop() {
-	h.cancel()
-	h.ConnManager.Clear()
-	h.redisMu.Lock()
-	defer h.redisMu.Unlock()
-	if h.redisClient != nil {
-		_ = h.redisClient.Close()
-		h.redisClient = nil
+	h.beginShutdown()
+	<-h.stopped
+}
+
+// Shutdown stops admission and waits for framework tasks and callbacks to exit.
+func (h *Homey) Shutdown(ctx context.Context) error {
+	h.beginShutdown()
+	select {
+	case <-h.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
+}
+
+func (h *Homey) beginTask() bool {
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+	if h.stopping {
+		return false
+	}
+	h.active.Add(1)
+	return true
+}
+
+func (h *Homey) startTask(run func()) {
+	if h.beginTask() {
+		go func() {
+			defer h.active.Done()
+			run()
+		}()
+	}
+}
+
+func (h *Homey) beginShutdown() {
+	h.stopOnce.Do(func() {
+		h.lifecycleMu.Lock()
+		h.stopping = true
+		h.lifecycleMu.Unlock()
+		go func() {
+			h.cancel()
+			h.ConnManager.Clear()
+			h.redisMu.Lock()
+			if h.redisClient != nil {
+				_ = h.redisClient.Close()
+				h.redisClient = nil
+			}
+			h.redisMu.Unlock()
+			close(h.stopped)
+			h.active.Wait()
+			close(h.done)
+		}()
+	})
 }
 
 func (h *Homey) AddRouter(msgID uint32, router Router) {
@@ -145,6 +196,10 @@ func (h *Homey) AddRouter(msgID uint32, router Router) {
 }
 
 func (h *Homey) SubscribeWorldChannel() {
+	if !h.beginTask() {
+		return
+	}
+	defer h.active.Done()
 	h.redisMu.Lock()
 	client := h.redisClient
 	h.redisMu.Unlock()
@@ -188,6 +243,14 @@ func (h *Homey) readSubscription(pubsub *redis.PubSub) {
 }
 
 func (h *Homey) RedirectMsgHandler() {
+	if !h.beginTask() {
+		return
+	}
+	defer h.active.Done()
+	h.redirectMessages()
+}
+
+func (h *Homey) redirectMessages() {
 	codec := newMessageCodec(h.settings)
 	for {
 		select {
@@ -217,6 +280,10 @@ func (h *Homey) RedirectMsgHandler() {
 }
 
 func (h *Homey) Distribute() error {
+	if !h.beginTask() {
+		return context.Canceled
+	}
+	defer h.active.Done()
 	h.redisMu.Lock()
 	defer h.redisMu.Unlock()
 
@@ -246,53 +313,103 @@ func (h *Homey) Distribute() error {
 		_ = client.Close()
 		return err
 	}
+	pending := map[string]bool{h.settings.Redis.WorldChannel: true, h.settings.Redis.ForwardChannel: true}
+	for len(pending) > 0 {
+		event, err := pubsub.Receive(ctx)
+		if err != nil {
+			_ = pubsub.Close()
+			_ = client.Close()
+			return err
+		}
+		if ack, ok := event.(*redis.Subscription); ok && ack.Kind == "subscribe" {
+			delete(pending, ack.Channel)
+		}
+	}
+	if !h.beginTask() {
+		_ = pubsub.Close()
+		_ = client.Close()
+		return context.Canceled
+	}
 	h.redisClient = client
 	go func() {
+		defer h.active.Done()
 		defer pubsub.Close()
 		h.readSubscription(pubsub)
 	}()
-	go h.RedirectMsgHandler()
+	h.startTask(h.redirectMessages)
 	return nil
 }
 
-func (h *Homey) publishForward(ctx context.Context, data []byte) error {
+// PublishForwardMsg publishes an encoded message with a target connection ID.
+func (h *Homey) PublishForwardMsg(ctx context.Context, data []byte) error {
+	return h.publish(ctx, h.settings.Redis.ForwardChannel, data)
+}
+
+// PublishWorldMsg publishes an encoded message with a target connection ID.
+func (h *Homey) PublishWorldMsg(ctx context.Context, data []byte) error {
+	return h.publish(ctx, h.settings.Redis.WorldChannel, data)
+}
+
+func (h *Homey) publish(ctx context.Context, channel string, data []byte) error {
+	if !h.beginTask() {
+		return context.Canceled
+	}
+	defer h.active.Done()
 	h.redisMu.Lock()
 	client := h.redisClient
 	h.redisMu.Unlock()
 	if client == nil {
 		return errors.New("homey: distribution is not running")
 	}
-	return distribute.Publish(ctx, client, h.settings.Redis.ForwardChannel, data)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(h.ctx, cancel)
+	defer stop()
+	return distribute.Publish(ctx, client, channel, data)
 }
 
 func (h *Homey) Echo() echo.HandlerFunc {
-	return func(c echo.Context) (err error) {
-		if h.ctx.Err() != nil {
-			return echo.NewHTTPError(http.StatusServiceUnavailable)
-		}
-		h.CallOnInit(c.Request().Context())
-		var id uint64
-		if h.settings.Distribute.Status {
-			if h.idGenerator == nil {
-				return echo.NewHTTPError(http.StatusServiceUnavailable, "distributed connection IDs are unavailable")
-			}
-			id, err = h.idGenerator.NextID()
-			if err != nil {
-				return err
-			}
-		} else {
-			id = h.nextID.Add(1)
-		}
-		ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
-		if err != nil {
-			return err
-		}
+	return func(c echo.Context) error {
+		h.ServeHTTP(c.Response(), c.Request())
+		return nil
+	}
+}
 
-		conn := NewEchoConnection(id, h, ws)
-		conn.Open()
-
+// ServeHTTP upgrades a standard HTTP request and serves the WebSocket connection.
+func (h *Homey) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !h.beginTask() {
+		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return
 	}
+	defer h.active.Done()
+	h.CallOnInit(r.Context())
+	if h.ctx.Err() != nil {
+		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+		return
+	}
+	var id uint64
+	if h.settings.Distribute.Status {
+		if h.idGenerator == nil {
+			http.Error(w, "distributed connection IDs are unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		var err error
+		id, err = h.idGenerator.NextID()
+		if err != nil {
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		id = h.nextID.Add(1)
+	}
+	ws, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+
+	conn := NewEchoConnection(id, h, ws)
+	conn.Open()
+
 }
 
 func NewHomey(messageType int) *Homey {
@@ -307,9 +424,13 @@ func NewHomeyWithConfig(messageType int, cfg config.GlobalConfig) *Homey {
 		settings:        cfg,
 		msgType:         messageType,
 		ConnManager:     NewConnectionManager(),
-		MsgHandler:      newMessageHandler(ctx, cfg),
 		RedirectMsgChan: make(chan *[]byte),
+		stopped:         make(chan struct{}),
+		done:            make(chan struct{}),
 	}
+	handler := newMessageHandler(ctx, cfg)
+	handler.startTask = h.startTask
+	h.MsgHandler = handler
 	if cfg.Distribute.Status && cfg.Distribute.MachineID != 0 {
 		h.idGenerator = utils.NewIDGenerator(cfg.Distribute.MachineID)
 	}

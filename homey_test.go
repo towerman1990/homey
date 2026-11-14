@@ -1,15 +1,18 @@
 package homey
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 	"github.com/towerman1990/homey/config"
 	"github.com/towerman1990/homey/network"
 )
@@ -192,4 +195,170 @@ func TestDistributedConfigRequiresMachineID(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(h.Stop)
+}
+
+type blockingRouter struct {
+	network.BaseRouter
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingRouter) Handle(network.Request) error {
+	close(r.started)
+	<-r.release
+	return nil
+}
+
+func TestSlowHandlerAndShutdown(t *testing.T) {
+	h, err := NewWithConfig(config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := &blockingRouter{started: make(chan struct{}), release: make(chan struct{})}
+	h.AddRouter(0, router)
+	server := httptest.NewServer(h)
+	t.Cleanup(server.Close)
+	t.Cleanup(h.Stop)
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(router.release)
+		}
+	})
+	client := dialWebSocket(t, "ws"+strings.TrimPrefix(server.URL, "http"))
+	if err := client.WriteMessage(websocket.TextMessage, []byte("work")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-router.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("handler did not start")
+	}
+	pong := make(chan struct{}, 1)
+	client.SetPongHandler(func(string) error {
+		pong <- struct{}{}
+		return nil
+	})
+	readErr := make(chan error, 1)
+	go func() {
+		_, _, err := client.ReadMessage()
+		readErr <- err
+	}()
+	if err := client.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-pong:
+	case <-time.After(time.Second):
+		t.Fatal("slow handler blocked WebSocket control messages")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := h.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown returned %v while the handler was running", err)
+	}
+	select {
+	case err := <-readErr:
+		if !websocket.IsCloseError(err, websocket.CloseGoingAway) {
+			t.Fatalf("expected going-away close, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("client did not receive the close message")
+	}
+	close(router.release)
+	released = true
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := h.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRedisDistribution(t *testing.T) {
+	addr := os.Getenv("HOMEY_TEST_REDIS_ADDR")
+	if addr == "" {
+		t.Skip("set HOMEY_TEST_REDIS_ADDR to an isolated Redis server")
+	}
+	cfg := config.Default()
+	cfg.Distribute.Status = true
+	cfg.Redis.Addr = addr
+	suffix := time.Now().Format("20060102150405.000000000")
+	cfg.Redis.WorldChannel = "homey-test-world-" + suffix
+	cfg.Redis.ForwardChannel = "homey-test-forward-" + suffix
+
+	newInstance := func(machineID uint16) *network.Homey {
+		t.Helper()
+		cfg.Distribute.MachineID = machineID
+		h, err := NewWithConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(h.Stop)
+		if err := h.Distribute(); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	sender, receiver := newInstance(1), newInstance(2)
+	opened := make(chan uint64, 1)
+	receiver.SetOnConnOpen(func(c network.Connection) error {
+		opened <- c.GetID()
+		return nil
+	})
+	client := dialWebSocket(t, testWebSocketServer(t, receiver))
+	var id uint64
+	select {
+	case id = <-opened:
+	case <-time.After(time.Second):
+		t.Fatal("connection did not register")
+	}
+	msg := network.NewMessage(0, []byte("across instances"))
+	msg.SetConnID(id)
+	wire, err := sender.Pack(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := sender.PublishForwardMsg(ctx, wire); err != nil {
+		t.Fatal(err)
+	}
+	if _, data, err := client.ReadMessage(); err != nil || string(data) != "across instances" {
+		t.Fatalf("received %q, err = %v", data, err)
+	}
+
+	admin := redis.NewClient(&redis.Options{Addr: addr})
+	defer admin.Close()
+	if err := admin.ClientKillByFilter(ctx, "TYPE", "pubsub").Err(); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		counts, err := admin.PubSubNumSub(ctx, cfg.Redis.WorldChannel, cfg.Redis.ForwardChannel).Result()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if counts[cfg.Redis.WorldChannel] == 2 && counts[cfg.Redis.ForwardChannel] == 2 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("Redis subscriptions did not reconnect")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if err := client.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.PublishWorldMsg(ctx, wire); err != nil {
+		t.Fatal(err)
+	}
+	if _, data, err := client.ReadMessage(); err != nil || string(data) != "across instances" {
+		t.Fatalf("received %q after reconnect, err = %v", data, err)
+	}
+	for _, h := range []*network.Homey{sender, receiver} {
+		if err := h.Shutdown(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
